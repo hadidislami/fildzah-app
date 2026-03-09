@@ -1,0 +1,2030 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#fdf2f8">
+  <title>Fildzah Rajwa ✨ Shine & Glow Daily App</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- ======================================================
+       🔥 FIREBASE CONFIG — GANTI DENGAN CONFIG KAMU!
+       Ambil dari: Firebase Console > Project Settings > Your apps
+       ====================================================== -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc }
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey:            "AIzaSyC6HuszFztzZXDexNHk9HnB3s3rymwJzFk",
+      authDomain:        "fildzah-rajwa-app-b7113.firebaseapp.com",
+      projectId:         "fildzah-rajwa-app-b7113",
+      storageBucket:     "fildzah-rajwa-app-b7113.firebasestorage.app",
+      messagingSenderId: "495503756531",
+      appId:             "1:495503756531:web:b8ad258eed7d6dddf2fb86"
+    };
+
+    const app  = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db   = getFirestore(app);
+
+    // ── helpers ──────────────────────────────────────────────
+    function uid()      { return auth.currentUser?.uid; }
+    function userRef()  { return doc(db, "users", uid()); }
+    function colRef(c)  { return collection(db, "users", uid(), c); }
+    function itemRef(c,id) { return doc(db, "users", uid(), c, String(id)); }
+
+    // Save full state section to Firestore
+    async function saveSection(section, data) {
+      if(!uid()) return;
+      try { await setDoc(doc(db,"users",uid(),section,"__data"), { value: JSON.stringify(data) }, {merge:true}); }
+      catch(e) { console.warn("saveSection error", e); }
+    }
+
+    // Load full state section
+    async function loadSection(section) {
+      if(!uid()) return null;
+      try {
+        const snap = await getDoc(doc(db,"users",uid(),section,"__data"));
+        if(snap.exists()) return JSON.parse(snap.data().value);
+      } catch(e) { console.warn("loadSection error", e); }
+      return null;
+    }
+
+    // ── Auth UI ───────────────────────────────────────────────
+    window.firebaseSignIn = async function() {
+      const provider = new GoogleAuthProvider();
+      try {
+        showLoginLoading(true);
+        await signInWithPopup(auth, provider);
+      } catch(e) {
+        showLoginLoading(false);
+        showLoginError(e.message);
+      }
+    };
+
+    window.firebaseSignOut = async function() {
+      if(confirm("Yakin mau keluar, Rajwa? 👋")) await signOut(auth);
+    };
+
+    // ── Auth state listener ───────────────────────────────────
+    onAuthStateChanged(auth, async (user) => {
+      if(user) {
+        document.getElementById("login-screen").style.display = "none";
+        document.getElementById("app").style.display = "block";
+        document.getElementById("user-name").textContent  = user.displayName || "Rajwa";
+        document.getElementById("user-photo").src = user.photoURL || "";
+        document.getElementById("user-photo").style.display = user.photoURL ? "block" : "none";
+
+        // Load data from Firestore
+        await loadAllData();
+        renderAll();
+        startRealtimeSync();
+      } else {
+        document.getElementById("login-screen").style.display = "flex";
+        document.getElementById("app").style.display = "none";
+        stopRealtimeSync();
+      }
+    });
+
+    // ── Load all data ─────────────────────────────────────────
+    async function loadAllData() {
+      const keys = ["habits","goals","tasks","diaryEntries","period","periodLog","transactions","savingGoals","monthlyBudgets","waterCount","waterTarget"];
+      for(const k of keys) {
+        const data = await loadSection(k);
+        if(data !== null) {
+          if(k === "period") state.period = data;
+          else if(k === "monthlyBudgets") state.monthlyBudgets = {...state.monthlyBudgets, ...data};
+          else if(k === "waterCount") state.waterCount = data;
+          else if(k === "waterTarget") state.waterTarget = data;
+          else state[k] = data;
+        }
+      }
+    }
+
+    // ── Realtime sync listeners ───────────────────────────────
+    let unsubscribers = [];
+    function stopRealtimeSync() { unsubscribers.forEach(u=>u()); unsubscribers=[]; }
+    function startRealtimeSync() {
+      stopRealtimeSync();
+      // Listen to habits changes from other devices
+      const sections = ["habits","goals","tasks","diaryEntries","periodLog","transactions","savingGoals"];
+      sections.forEach(section => {
+        const unsub = onSnapshot(
+          doc(db,"users",uid(),section,"__data"),
+          (snap) => {
+            if(snap.exists() && snap.metadata.hasPendingWrites === false) {
+              const data = JSON.parse(snap.data().value);
+              state[section] = data;
+              rerenderSection(section);
+            }
+          },
+          (err) => console.warn("snapshot error", err)
+        );
+        unsubscribers.push(unsub);
+      });
+    }
+
+    function rerenderSection(section) {
+      const tab = state.activeTab;
+      if(section==="habits" && tab==="habits") renderHabits();
+      else if(section==="goals" && tab==="goals") renderGoals();
+      else if(section==="tasks" && tab==="tasks") renderTasks();
+      else if(section==="diaryEntries" && tab==="diary") renderDiary();
+      else if(section==="periodLog" && tab==="period") renderPeriodContent();
+      else if((section==="transactions"||section==="savingGoals") && tab==="finance") renderFinance();
+      if(tab==="home") renderHomeStats();
+    }
+
+    // ── Expose save function globally ─────────────────────────
+    window.fbSave = saveSection;
+
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --pink: #f9a8d4; --rose: #fda4af; --purple: #c4b5fd; --lavender: #e9d5ff;
+      --peach: #fed7aa; --mint: #a7f3d0; --sky: #bae6fd; --yellow: #fef08a;
+      --dark-pink: #9d174d; --med-pink: #be185d; --light-pink: #fce7f3;
+      --text: #7c3f6e; --text-light: #6b3a5e;
+    }
+    html, body { height: 100%; background: #fdf2f8; font-family: 'Nunito', sans-serif; overflow-x: hidden; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #fce7f3; }
+    ::-webkit-scrollbar-thumb { background: #f9a8d4; border-radius: 999px; }
+    input, select, textarea, button { font-family: 'Nunito', sans-serif; }
+    button { cursor: pointer; }
+
+    /* Layout */
+    #app { min-height: 100vh; background: linear-gradient(135deg, #fdf2f8 0%, #fdf4ff 50%, #f0f9ff 100%); position: relative; }
+    .deco-bg { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+    .deco-item { position: absolute; opacity: 0.04; animation: float 4s ease-in-out infinite; }
+
+    /* Header */
+    #header {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(253,242,248,0.97); backdrop-filter: blur(20px);
+      border-bottom: 2px solid #fce7f3; padding: 12px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .header-icon { font-size: 28px; animation: float 3s ease-in-out infinite; }
+    .header-title { font-family: 'Playfair Display', serif; font-weight: 700; color: #9d174d; font-size: 18px; line-height: 1; }
+    .header-sub { font-size: 10px; color: #be185d; font-weight: 600; }
+    .header-badge { background: linear-gradient(135deg, #fce7f3, #ede9fe); border-radius: 20px; padding: 6px 14px; border: 1.5px solid #fce7f3; font-size: 12px; color: #9d174d; font-weight: 700; }
+
+    /* Content */
+    #content { max-width: 480px; margin: 0 auto; padding: 20px 16px 110px; position: relative; z-index: 1; }
+
+    /* Bottom Nav */
+    #bottom-nav {
+      position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+      width: 100%; max-width: 480px;
+      background: rgba(253,242,248,0.97); backdrop-filter: blur(20px);
+      border-top: 2px solid #fce7f3; padding: 8px 8px 14px;
+      display: flex; justify-content: space-around; z-index: 100;
+    }
+    .nav-btn {
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      background: transparent; border: none; border-radius: 16px;
+      padding: 7px 8px; transition: all 0.2s; min-width: 48px; flex: 1;
+    }
+    .nav-btn.active { background: linear-gradient(135deg, #f9a8d4, #c4b5fd); }
+    .nav-btn:hover { transform: translateY(-2px); }
+    .nav-icon { font-size: 18px; }
+    .nav-label { font-size: 8.5px; font-weight: 700; color: #be185d; }
+
+    /* Cards */
+    .card { border-radius: 24px; padding: 20px; border: 2px solid #fce7f3; background: #fff9fb; margin-bottom: 16px; }
+    .card-gradient { background: linear-gradient(135deg, #fdf2f8, #ede9fe); }
+    .card-purple { background: linear-gradient(135deg, #fdf4ff, #ede9fe); border-color: #e9d5ff; }
+    .card-blue { background: linear-gradient(135deg, #eff6ff, #dbeafe); border-color: #bae6fd; }
+    .card-red { background: linear-gradient(135deg, #fff1f2, #ffe4e6); border-color: #fecdd3; }
+    .card-green { background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-color: #bbf7d0; }
+
+    /* Typography */
+    .section-title { font-family: 'Playfair Display', serif; color: #9d174d; font-size: 22px; margin-bottom: 0; }
+    .card-title { font-family: 'Playfair Display', serif; color: #9d174d; font-size: 16px; margin: 0 0 14px; }
+    .sub-label { font-size: 13px; color: #be185d; font-weight: 600; }
+
+    /* Progress bar */
+    .progress-track { background: #fce7f3; border-radius: 999px; height: 8px; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #f9a8d4, #c4b5fd); transition: width 0.5s; }
+    .progress-fill-blue { background: linear-gradient(90deg, #60a5fa, #2563eb); }
+    .progress-fill-green { background: linear-gradient(90deg, #86efac, #22c55e); }
+
+    /* Buttons */
+    .btn-primary {
+      padding: 10px 20px; border-radius: 16px; border: none; font-weight: 700;
+      font-size: 14px; transition: all 0.2s; cursor: pointer;
+      background: linear-gradient(135deg, #f9a8d4, #c4b5fd); color: #fff;
+      box-shadow: 0 4px 15px rgba(249,168,212,0.4); font-family: 'Nunito', sans-serif;
+    }
+    .btn-primary:active { transform: scale(0.97); }
+    .btn-secondary {
+      padding: 10px 20px; border-radius: 16px; border: none; font-weight: 700;
+      font-size: 14px; background: #fce7f3; color: #9d174d; cursor: pointer;
+      font-family: 'Nunito', sans-serif; transition: all 0.2s;
+    }
+    .btn-full { width: 100%; display: block; text-align: center; }
+    .btn-icon {
+      background: #fce7f3; border: none; border-radius: 50%; width: 30px; height: 30px;
+      cursor: pointer; color: #be185d; font-size: 14px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* Input */
+    .input-field {
+      width: 100%; padding: 10px 14px; border-radius: 14px;
+      border: 2px solid #fce7f3; background: #fff9fb; font-size: 14px;
+      outline: none; color: #7c3f6e; font-family: 'Nunito', sans-serif;
+    }
+    .input-field:focus { border-color: #f9a8d4; }
+    .select-field {
+      width: 100%; padding: 10px 14px; border-radius: 14px;
+      border: 2px solid #fce7f3; background: #fff9fb; color: #7c3f6e;
+      font-size: 14px; font-family: 'Nunito', sans-serif; outline: none;
+    }
+    textarea.input-field { min-height: 120px; resize: vertical; line-height: 1.6; }
+    .input-label { font-size: 13px; color: #9d174d; font-weight: 600; margin-bottom: 6px; display: block; }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(124,63,110,0.18);
+      backdrop-filter: blur(4px); z-index: 1000;
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal-box {
+      background: linear-gradient(135deg, #fff9fb 0%, #fdf2f8 100%);
+      border-radius: 24px; padding: 24px; width: 100%; max-width: 420px;
+      box-shadow: 0 20px 60px rgba(249,168,212,0.4); border: 2px solid #fce7f3;
+      max-height: 90vh; overflow-y: auto;
+    }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+    .modal-title { margin: 0; color: #9d174d; font-family: 'Playfair Display', serif; font-size: 20px; }
+    .modal-close {
+      background: #fce7f3; border: none; border-radius: 50%; width: 32px; height: 32px;
+      cursor: pointer; font-size: 16px; color: #9d174d; display: flex; align-items: center; justify-content: center;
+    }
+    .modal-body { display: flex; flex-direction: column; gap: 12px; }
+
+    /* Tabs */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Habit item */
+    .habit-item {
+      background: #fff9fb; border-radius: 20px; padding: 16px; border: 2px solid #fce7f3;
+      display: flex; align-items: center; gap: 14px; transition: all 0.3s; margin-bottom: 10px;
+    }
+    .habit-item.done { transform: scale(1.01); }
+    .habit-toggle {
+      width: 48px; height: 48px; border-radius: 50%; border: 3px solid #f9a8d4;
+      background: white; font-size: 22px; cursor: pointer; flex-shrink: 0;
+      transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+    }
+    .habit-toggle.done { background: #f9a8d4; }
+    .habit-name { font-weight: 700; color: #7c3f6e; font-size: 15px; }
+    .habit-meta { font-size: 12px; color: #be185d; }
+
+    /* Task item */
+    .task-item {
+      background: #fff9fb; border-radius: 18px; padding: 14px 16px; margin-bottom: 10px;
+      border: 2px solid #fce7f3; display: flex; align-items: center; gap: 12px;
+      transition: all 0.2s;
+    }
+    .task-item.done { background: #f0fdf4; border-color: #86efac; opacity: 0.7; }
+    .task-toggle {
+      width: 36px; height: 36px; border-radius: 50%; border: 3px solid #f9a8d4;
+      background: white; cursor: pointer; font-size: 16px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .task-toggle.done { background: #86efac; border-color: #86efac; }
+    .task-title { font-weight: 700; color: #7c3f6e; font-size: 14px; }
+    .task-title.done { text-decoration: line-through; }
+    .task-meta { font-size: 11px; color: #be185d; }
+
+    /* Mood buttons */
+    .mood-btn {
+      background: #fce7f3; border: 2px solid #fce7f3; border-radius: 16px;
+      padding: 8px 10px; cursor: pointer; font-size: 18px; transition: all 0.2s;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    .mood-btn.selected { background: linear-gradient(135deg, #f9a8d4, #c4b5fd); border-color: #ec4899; transform: scale(1.15); }
+    .mood-label { font-size: 9px; font-weight: 700; margin-top: 2px; color: #be185d; }
+    .mood-btn.selected .mood-label { color: #fff; }
+
+    /* Water drops */
+    .water-drop { background: none; border: none; cursor: pointer; font-size: 26px; transition: all 0.2s; padding: 2px; }
+    .water-drop.empty { opacity: 0.22; transform: scale(0.85); }
+
+    /* Color picker */
+    .color-dot {
+      width: 32px; height: 32px; border-radius: 50%; border: 2px solid white;
+      cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+    }
+    .color-dot.selected { border: 3px solid #9d174d; }
+
+    /* Goal item */
+    .goal-item {
+      background: linear-gradient(135deg, #fff9fb, #fdf4ff); border-radius: 24px;
+      padding: 20px; border: 2px solid rgba(249,168,212,0.4); position: relative;
+      overflow: hidden; margin-bottom: 16px;
+    }
+    .goal-progress-btn {
+      flex: 1; padding: 4px 0; border-radius: 10px; border: 2px solid #fce7f3;
+      background: white; color: #9d174d; cursor: pointer; font-size: 11px; font-weight: 700;
+    }
+
+    /* Diary */
+    .diary-entry {
+      border-radius: 20px; padding: 18px; border: 2px solid #fce7f3;
+      cursor: pointer; transition: transform 0.2s; position: relative; margin-bottom: 12px;
+    }
+    .diary-entry:hover { transform: translateY(-2px); }
+
+    /* Finance */
+    .saldo-card {
+      background: linear-gradient(135deg, #1a0533, #3b0764, #1e1b4b);
+      border-radius: 28px; padding: 26px; position: relative; overflow: hidden;
+      box-shadow: 0 8px 32px rgba(59,7,100,0.4); margin-bottom: 16px;
+    }
+    .tx-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 0; border-bottom: 1px solid #fce7f3;
+    }
+    .tx-item:last-child { border-bottom: none; }
+    .tx-icon { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+
+    /* Finance subnav */
+    .finance-nav {
+      display: flex; gap: 6px; margin-bottom: 16px;
+    }
+    .finance-nav-btn {
+      flex: 1; padding: 8px 4px; border-radius: 14px; border: none; cursor: pointer;
+      background: #fce7f3; color: #9d174d; font-weight: 700; font-size: 11px;
+      font-family: 'Nunito', sans-serif; transition: all 0.2s;
+    }
+    .finance-nav-btn.active { background: linear-gradient(135deg, #f9a8d4, #c4b5fd); color: #fff; }
+
+    /* Rupiah input */
+    .rupiah-wrapper { position: relative; }
+    .rupiah-prefix {
+      position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+      color: #be185d; font-weight: 700; font-size: 14px; pointer-events: none;
+    }
+    .rupiah-input {
+      width: 100%; padding: 10px 14px 10px 40px; border-radius: 14px;
+      border: 2px solid #fce7f3; background: #fff9fb; color: #7c3f6e;
+      font-size: 15px; font-family: 'Nunito', sans-serif; font-weight: 700;
+      outline: none;
+    }
+
+    /* Breathing */
+    .breathe-ring {
+      position: relative; width: 160px; height: 160px; margin: 0 auto 20px;
+    }
+    .breathe-outer { position: absolute; inset: 0; border-radius: 50%; background: rgba(134,239,172,0.15); transition: transform 1s ease; }
+    .breathe-mid { position: absolute; inset: 10px; border-radius: 50%; background: rgba(74,222,128,0.2); border: 2px solid rgba(74,222,128,0.3); transition: transform 1s ease; }
+    .breathe-core {
+      position: absolute; inset: 20px; border-radius: 50%;
+      background: linear-gradient(135deg, #86efac, #4ade80);
+      box-shadow: 0 0 20px rgba(134,239,172,0.4);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px; transition: transform 1s ease, box-shadow 0.8s ease;
+    }
+    .breathe-core.active { box-shadow: 0 0 30px rgba(74,222,128,0.7), 0 0 60px rgba(74,222,128,0.3); }
+
+    /* Period calendar */
+    .period-day {
+      width: 30px; height: 30px; border-radius: 50%; background: #fce7f3;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 600; color: #7c3f6e; border: 1.5px solid white;
+    }
+    .period-day.today { border: 2.5px solid #9d174d; box-shadow: 0 0 0 3px #fce7f3; font-weight: 800; }
+    .period-day.in-period { background: #fb7185; color: #fff; }
+    .period-day.fertile { background: #86efac; }
+    .period-day.ovulation { background: #fbbf24; }
+
+    /* Self-care checklist */
+    .selfcare-item {
+      display: flex; align-items: center; gap: 12px; padding: 10px 0;
+      border-bottom: 1px solid #fce7f3; cursor: pointer;
+    }
+    .selfcare-item:last-child { border-bottom: none; }
+    .selfcare-check {
+      width: 28px; height: 28px; border-radius: 50%; border: 2.5px solid #fce7f3;
+      background: white; display: flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0; transition: all 0.2s;
+    }
+    .selfcare-check.done { border-color: #ec4899; background: #f9a8d4; }
+
+    /* Saving goal */
+    .saving-item {
+      border-radius: 24px; padding: 20px; margin-bottom: 16px;
+    }
+    .saving-add-btn {
+      flex: 1; min-width: 50px; padding: 7px 4px; border-radius: 12px;
+      border: 2px solid rgba(249,168,212,0.4); background: white; color: #7c3f6e;
+      cursor: pointer; font-size: 10px; font-weight: 800; transition: all 0.2s;
+    }
+
+    /* Animations */
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes scaleIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+    .fade-in { animation: fadeIn 0.3s ease forwards; }
+    .scale-in { animation: scaleIn 0.25s ease forwards; }
+
+    /* Responsive desktop */
+    @media (min-width: 600px) {
+      #bottom-nav { border-radius: 24px 24px 0 0; }
+      .nav-label { font-size: 9px; }
+      #content { padding-bottom: 120px; }
+    }
+
+    /* Tag pill */
+    .tag-pill { background: #fce7f3; border-radius: 999px; padding: 4px 12px; font-size: 12px; color: #be185d; font-weight: 600; display: inline-block; }
+
+    /* Symptom btn */
+    .symptom-btn {
+      padding: 5px 12px; border-radius: 999px; border: 2px solid #fce7f3;
+      background: white; color: #9d174d; cursor: pointer; font-size: 12px; font-weight: 600;
+    }
+    .symptom-btn.selected { border-color: #ec4899; background: #fce7f3; }
+
+    /* Flow btn */
+    .flow-btn {
+      flex: 1; padding: 8px 4px; border-radius: 12px; border: 2px solid #fce7f3;
+      background: white; color: #9d174d; cursor: pointer; font-size: 11px; font-weight: 700;
+    }
+    .flow-btn.selected { border-color: #ec4899; }
+
+    /* Section row */
+    .section-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+
+    /* Flex utils */
+    .flex { display: flex; }
+    .flex-col { display: flex; flex-direction: column; gap: 12px; }
+    .gap-8 { gap: 8px; }
+    .gap-10 { gap: 10px; }
+    .gap-12 { gap: 12px; }
+    .mb-10 { margin-bottom: 10px; }
+    .mb-16 { margin-bottom: 16px; }
+    .text-center { text-align: center; }
+  </style>
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<div id="login-screen" style="
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:100vh; background:linear-gradient(135deg,#fdf2f8 0%,#fdf4ff 60%,#f0f9ff 100%);
+  padding:32px 20px; font-family:'Nunito',sans-serif;
+">
+  <div style="text-align:center;max-width:360px;width:100%">
+
+    <!-- Logo & Title -->
+    <div style="font-size:72px;margin-bottom:12px;display:inline-block;animation:float 3s ease-in-out infinite">🌸</div>
+    <h1 style="font-family:'Playfair Display',serif;color:#9d174d;font-size:28px;margin:0 0 6px;line-height:1.2">Fildzah Rajwa</h1>
+    <p style="color:#be185d;font-size:14px;margin:0 0 8px;font-weight:700">✨ Shine & Glow Daily App</p>
+    <p style="color:#7c3f6e;font-size:13px;margin:0 0 28px;line-height:1.7">
+      Login dengan Google untuk sinkronisasi data<br>di semua device kamu secara otomatis 💕
+    </p>
+
+    <!-- Card -->
+    <div style="background:linear-gradient(135deg,#fff9fb,#fdf4ff);border-radius:28px;padding:28px 24px;border:2px solid #fce7f3;box-shadow:0 8px 40px rgba(249,168,212,0.25)">
+
+      <!-- Welcome row -->
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;padding-bottom:18px;border-bottom:1.5px solid #fce7f3">
+        <div style="width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#f9a8d4,#c4b5fd);display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0;box-shadow:0 4px 12px rgba(249,168,212,0.4)">👑</div>
+        <div style="text-align:left">
+          <div style="font-weight:800;color:#7c3f6e;font-size:16px;margin-bottom:2px">Selamat datang!</div>
+          <div style="font-size:12px;color:#be185d;font-weight:600">Data kamu tersimpan di cloud ☁️</div>
+        </div>
+      </div>
+
+      <!-- Feature list -->
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:22px">
+        <div style="display:flex;align-items:center;gap:12px;background:#fce7f3;border-radius:14px;padding:10px 14px">
+          <span style="font-size:18px;flex-shrink:0">📱</span>
+          <span style="font-size:13px;color:#7c3f6e;font-weight:600;text-align:left">Sync otomatis HP &amp; Desktop</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;background:#fce7f3;border-radius:14px;padding:10px 14px">
+          <span style="font-size:18px;flex-shrink:0">🔒</span>
+          <span style="font-size:13px;color:#7c3f6e;font-weight:600;text-align:left">Data aman &amp; private</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;background:#fce7f3;border-radius:14px;padding:10px 14px">
+          <span style="font-size:18px;flex-shrink:0">☁️</span>
+          <span style="font-size:13px;color:#7c3f6e;font-weight:600;text-align:left">Tidak hilang walau ganti HP</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;background:#fce7f3;border-radius:14px;padding:10px 14px">
+          <span style="font-size:18px;flex-shrink:0">⚡</span>
+          <span style="font-size:13px;color:#7c3f6e;font-weight:600;text-align:left">Update realtime antar device</span>
+        </div>
+      </div>
+
+      <!-- Google Sign In Button -->
+      <button onclick="firebaseSignIn()" id="login-btn" style="
+        width:100%;padding:15px 20px;border-radius:18px;border:none;cursor:pointer;
+        background:white;box-shadow:0 2px 16px rgba(0,0,0,0.12);
+        display:flex;align-items:center;justify-content:center;gap:12px;
+        font-family:'Nunito',sans-serif;font-weight:800;font-size:15px;color:#374151;
+        transition:all 0.25s;
+      "
+        onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 24px rgba(0,0,0,0.16)'"
+        onmouseout="this.style.transform='';this.style.boxShadow='0 2px 16px rgba(0,0,0,0.12)'">
+        <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+        </svg>
+        Masuk dengan Google
+      </button>
+
+      <div id="login-loading" style="display:none;margin-top:14px;text-align:center;color:#be185d;font-size:13px;font-weight:600">
+        ⏳ Sedang masuk...
+      </div>
+      <div id="login-error" style="display:none;margin-top:12px;padding:10px 14px;background:#fce7f3;border-radius:12px;color:#9d174d;font-size:12px;text-align:left"></div>
+    </div>
+
+    <p style="margin-top:18px;color:#c4b5fd;font-size:11px;font-weight:600">
+      💜 Data tersimpan aman di Google Firebase
+    </p>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <!-- Decorative BG -->
+  <div class="deco-bg">
+    <div class="deco-item" style="font-size:36px;top:10%;left:5%;animation-duration:4s">🌸</div>
+    <div class="deco-item" style="font-size:44px;top:25%;left:21%;animation-duration:5s;animation-delay:0.5s">✨</div>
+    <div class="deco-item" style="font-size:52px;top:40%;left:37%;animation-duration:6s;animation-delay:1s">💕</div>
+    <div class="deco-item" style="font-size:60px;top:55%;left:53%;animation-duration:5.5s;animation-delay:1.5s">🌺</div>
+    <div class="deco-item" style="font-size:68px;top:70%;left:69%;animation-duration:4.5s;animation-delay:2s">⭐</div>
+    <div class="deco-item" style="font-size:76px;top:15%;left:85%;animation-duration:7s;animation-delay:2.5s">💫</div>
+  </div>
+
+  <!-- Header -->
+  <div id="header">
+    <div class="header-left">
+      <div class="header-icon">🌸</div>
+      <div>
+        <div class="header-title">Fildzah Rajwa</div>
+        <div class="header-sub">✨ Shine & Glow Daily App</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <img id="user-photo" src="" alt="" style="width:28px;height:28px;border-radius:50%;border:2px solid #fce7f3;display:none;object-fit:cover">
+      <div style="background:linear-gradient(135deg,#fce7f3,#ede9fe);border-radius:20px;padding:5px 12px;border:1.5px solid #fce7f3;font-size:11px;color:#9d174d;font-weight:700;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="user-name">Rajwa</div>
+      <button onclick="firebaseSignOut()" title="Sign out" style="background:#fce7f3;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:14px;color:#9d174d;display:flex;align-items:center;justify-content:center">🚪</button>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div id="content">
+
+    <!-- HOME TAB -->
+    <div id="tab-home" class="tab-panel active">
+      <!-- Greeting -->
+      <div class="card card-gradient" style="position:relative;overflow:hidden;margin-bottom:16px">
+        <div style="position:absolute;top:-20px;right:-20px;font-size:80px;opacity:0.1">🌸</div>
+        <div id="today-date" style="font-size:13px;color:#be185d;font-weight:600;margin-bottom:4px"></div>
+        <h2 style="margin:0 0 8px;color:#7c3f6e;font-family:'Playfair Display',serif;font-size:22px">Haii, Fildzah Rajwa! 👑</h2>
+        <p id="affirmation-text" style="margin:0 0 16px;color:#9d174d;font-size:14px;line-height:1.6"></p>
+        <div style="display:flex;gap:12px">
+          <div style="background:#fff;border-radius:16px;padding:10px 16px;text-align:center;flex:1;border:1.5px solid #fce7f3">
+            <div id="stats-habits" style="font-size:22px;font-weight:800;color:#ec4899">0/0</div>
+            <div style="font-size:11px;color:#be185d;font-weight:600">Habits Hari Ini</div>
+          </div>
+          <div style="background:#fff;border-radius:16px;padding:10px 16px;text-align:center;flex:1;border:1.5px solid #fce7f3">
+            <div id="stats-tasks" style="font-size:22px;font-weight:800;color:#8b5cf6">0/0</div>
+            <div style="font-size:11px;color:#6d28d9;font-weight:600">Tugas Selesai</div>
+          </div>
+          <div style="background:#fff;border-radius:16px;padding:10px 16px;text-align:center;flex:1;border:1.5px solid #fce7f3">
+            <div id="stats-water" style="font-size:22px;font-weight:800;color:#f59e0b">3/8</div>
+            <div style="font-size:11px;color:#d97706;font-weight:600">Gelas Air</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Virtual Pet -->
+      <div class="card" style="background:linear-gradient(135deg,#fdf4ff,#fce7f3);border-color:#e9d5ff;text-align:center;margin-bottom:16px">
+        <div id="pet-emoji" style="font-size:64px;transition:all 0.3s">🐱</div>
+        <p id="pet-msg" style="margin:8px 0 0;color:#7c3f6e;font-weight:600;font-size:14px">Hai Rajwa! Aku teman setiamu 💖 Jangan lupa selesaikan habitmu ya!</p>
+        <div style="font-size:11px;color:#be185d;margin-top:4px">✨ Mochi, si kucing virtual Rajwa</div>
+      </div>
+
+      <!-- Mood Tracker -->
+      <div class="card" style="margin-bottom:16px">
+        <h3 class="card-title" style="margin-bottom:14px">💗 Mood Hari Ini</h3>
+        <div id="mood-grid" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+        <p id="mood-result" style="margin:12px 0 0;color:#ec4899;font-size:13px;font-weight:600;display:none"></p>
+      </div>
+
+      <!-- Water Tracker -->
+      <div class="card card-blue" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <h3 class="card-title" style="color:#1d4ed8;margin-bottom:0">💧 Water Tracker</h3>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:11px;color:#1d4ed8;font-weight:600">Target:</span>
+            <button onclick="changeWaterTarget(-1)" style="width:24px;height:24px;border-radius:50%;background:#bae6fd;border:none;cursor:pointer;font-size:14px;color:#1d4ed8;font-weight:800;display:flex;align-items:center;justify-content:center">−</button>
+            <span id="water-target-num" style="font-weight:800;color:#1e40af;font-size:16px;min-width:24px;text-align:center">8</span>
+            <button onclick="changeWaterTarget(1)" style="width:24px;height:24px;border-radius:50%;background:#bae6fd;border:none;cursor:pointer;font-size:14px;color:#1d4ed8;font-weight:800;display:flex;align-items:center;justify-content:center">+</button>
+          </div>
+        </div>
+        <div id="water-drops" style="display:flex;gap:5px;align-items:center;flex-wrap:wrap"></div>
+        <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+          <span id="water-count-label" style="color:#1d4ed8;font-weight:700;font-size:14px">3/8 gelas</span>
+          <button onclick="resetWater()" style="background:#dbeafe;border:none;border-radius:10px;padding:4px 12px;color:#1d4ed8;cursor:pointer;font-size:11px;font-weight:600">Reset</button>
+        </div>
+        <div id="water-progress-wrap" style="margin-top:8px;background:#dbeafe;border-radius:999px;height:6px;overflow:hidden;display:none">
+          <div id="water-progress-fill" class="progress-fill progress-fill-blue" style="width:0%"></div>
+        </div>
+        <p id="water-done-msg" style="margin:8px 0 0;color:#2563eb;font-size:13px;font-weight:600;display:none">🥳 Target hidrasi hari ini tercapai! Rajwa keren!</p>
+      </div>
+
+      <!-- Period Tracker Home Preview -->
+      <div class="card card-red" style="margin-bottom:16px">
+        <h3 class="card-title" style="color:#be123c;margin-bottom:10px">🩸 Period Tracker</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div id="home-period-last" style="color:#be123c;font-size:13px;margin-bottom:4px"></div>
+            <div id="home-period-next" style="color:#9f1239;font-weight:700;font-size:16px"></div>
+          </div>
+          <div style="font-size:40px">🌹</div>
+        </div>
+      </div>
+
+      <!-- Daily Quote -->
+      <div class="card card-purple" style="text-align:center;margin-bottom:16px">
+        <div style="font-size:24px;margin-bottom:8px">💜</div>
+        <p id="daily-quote" style="margin:0;color:#6d28d9;font-size:13px;font-style:italic;line-height:1.7;font-family:'Playfair Display',serif"></p>
+        <button onclick="nextQuote()" style="margin-top:12px;background:#ede9fe;border:none;border-radius:12px;padding:6px 16px;color:#6d28d9;cursor:pointer;font-size:12px;font-weight:600">Quote Lainnya ✨</button>
+      </div>
+    </div>
+
+    <!-- HABITS TAB -->
+    <div id="tab-habits" class="tab-panel">
+      <div class="section-row">
+        <h2 class="section-title">✨ Habits Harian</h2>
+        <button class="btn-primary" onclick="showModal('modal-add-habit')">+ Tambah</button>
+      </div>
+      <div class="card card-gradient" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <span style="color:#9d174d;font-weight:700;font-size:14px">Progress Hari Ini</span>
+          <span id="habits-progress-label" style="color:#ec4899;font-weight:800">0/0</span>
+        </div>
+        <div class="progress-track" style="height:10px"><div id="habits-progress-fill" class="progress-fill" style="width:0%"></div></div>
+        <p id="habits-done-msg" style="margin:8px 0 0;color:#ec4899;font-size:13px;font-weight:700;display:none">🎉 Semua habit selesai! Rajwa luar biasa!</p>
+      </div>
+      <div id="habits-list"></div>
+    </div>
+
+    <!-- GOALS TAB -->
+    <div id="tab-goals" class="tab-panel">
+      <div class="section-row">
+        <h2 class="section-title">🎯 Goals & Dreams</h2>
+        <button class="btn-primary" onclick="showModal('modal-add-goal')">+ Tambah</button>
+      </div>
+      <div id="goals-list"></div>
+    </div>
+
+    <!-- TASKS TAB -->
+    <div id="tab-tasks" class="tab-panel">
+      <div class="section-row">
+        <h2 class="section-title">📚 Tugas & Proyek</h2>
+        <button class="btn-primary" onclick="showModal('modal-add-task')">+ Tambah</button>
+      </div>
+      <div id="tasks-stats" style="display:flex;gap:10px;margin-bottom:16px"></div>
+      <div id="tasks-list"></div>
+    </div>
+
+    <!-- DIARY TAB -->
+    <div id="tab-diary" class="tab-panel">
+      <div class="section-row">
+        <h2 class="section-title">💌 Diary Rahasia</h2>
+        <button class="btn-primary" onclick="showModal('modal-add-diary')">+ Tulis</button>
+      </div>
+      <div class="card" style="background:linear-gradient(135deg,#fdf4ff,#fce7f3);border-color:#e9d5ff;text-align:center;margin-bottom:16px">
+        <div style="font-size:32px">🔒</div>
+        <p style="margin:8px 0 0;color:#7c3f6e;font-size:13px;font-style:italic">"Ini adalah tempat aman untuk semua perasaan Rajwa. Tidak ada yang menghakimi di sini 💜"</p>
+      </div>
+      <div id="diary-detail" style="display:none"></div>
+      <div id="diary-list"></div>
+    </div>
+
+    <!-- PERIOD TAB -->
+    <div id="tab-period" class="tab-panel">
+      <div class="section-row" style="flex-wrap:wrap;gap:8px">
+        <h2 class="section-title">🩸 Period Tracker</h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn-secondary" onclick="togglePeriodSettings()" style="font-size:12px;padding:8px 12px">⚙️ Setting</button>
+          <button class="btn-primary" onclick="showModal('modal-add-period')">+ Catat</button>
+        </div>
+      </div>
+      <div id="period-settings" style="display:none"></div>
+      <div id="period-content"></div>
+    </div>
+
+    <!-- FINANCE TAB -->
+    <div id="tab-finance" class="tab-panel">
+      <div class="section-row">
+        <h2 class="section-title">💰 Personal Finance</h2>
+        <button class="btn-primary" onclick="showModal('modal-add-tx')">+ Catat</button>
+      </div>
+      <div class="finance-nav">
+        <button class="finance-nav-btn active" onclick="switchFinanceView('overview')" id="fnav-overview">📊 Overview</button>
+        <button class="finance-nav-btn" onclick="switchFinanceView('transaksi')" id="fnav-transaksi">📋 Transaksi</button>
+        <button class="finance-nav-btn" onclick="switchFinanceView('budget')" id="fnav-budget">🎯 Budget</button>
+        <button class="finance-nav-btn" onclick="switchFinanceView('tabungan')" id="fnav-tabungan">🐷 Tabungan</button>
+      </div>
+      <div id="finance-content"></div>
+    </div>
+
+    <!-- WELLNESS TAB -->
+    <div id="tab-wellness" class="tab-panel">
+      <h2 class="section-title" style="margin-bottom:16px">🌸 Wellness Corner</h2>
+
+      <!-- Breathing -->
+      <div class="card card-green" style="text-align:center;padding:28px;margin-bottom:16px">
+        <h3 style="margin:0 0 6px;color:#166534;font-family:'Playfair Display',serif">🫁 Latihan Pernapasan</h3>
+        <p style="margin:0 0 22px;color:#4ade80;font-size:12px;font-weight:600">4 detik tarik · 4 detik tahan · 6 detik hembuskan</p>
+        <div class="breathe-ring">
+          <div class="breathe-outer" id="breathe-outer"></div>
+          <div class="breathe-mid" id="breathe-mid"></div>
+          <div class="breathe-core" id="breathe-core">🌿</div>
+        </div>
+        <div style="min-height:56px;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-bottom:16px">
+          <p id="breathe-phase-text" style="color:#166534;font-weight:800;font-size:20px;margin:0 0 4px;font-family:'Playfair Display',serif">Siap untuk relaksasi? 🌿</p>
+          <div id="breathe-dots" style="display:flex;gap:4px"></div>
+        </div>
+        <button id="breathe-btn" class="btn-primary" onclick="toggleBreathe()" style="background:linear-gradient(135deg,#86efac,#4ade80);color:#166534;box-shadow:0 4px 15px rgba(74,222,128,0.4)">Mulai Bernapas 🌿</button>
+      </div>
+
+      <!-- Self Care -->
+      <div class="card" style="background:linear-gradient(135deg,#fff9fb,#fdf4ff);margin-bottom:16px">
+        <h3 class="card-title">💅 Self-Care Today</h3>
+        <div id="selfcare-list"></div>
+      </div>
+
+      <!-- Motivation -->
+      <div class="card card-purple" style="margin-bottom:16px">
+        <h3 style="margin:0 0 16px;color:#6d28d9;font-family:'Playfair Display',serif;font-size:17px">💜 Kata-Kata Motivasi Untuk Rajwa</h3>
+        <div id="motivasi-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Nav -->
+  <div id="bottom-nav">
+    <button class="nav-btn active" data-tab="home" onclick="switchTab('home')"><span class="nav-icon">🏠</span><span class="nav-label">Home</span></button>
+    <button class="nav-btn" data-tab="habits" onclick="switchTab('habits')"><span class="nav-icon">✨</span><span class="nav-label">Habits</span></button>
+    <button class="nav-btn" data-tab="goals" onclick="switchTab('goals')"><span class="nav-icon">🎯</span><span class="nav-label">Goals</span></button>
+    <button class="nav-btn" data-tab="tasks" onclick="switchTab('tasks')"><span class="nav-icon">📚</span><span class="nav-label">Tasks</span></button>
+    <button class="nav-btn" data-tab="diary" onclick="switchTab('diary')"><span class="nav-icon">💌</span><span class="nav-label">Diary</span></button>
+    <button class="nav-btn" data-tab="period" onclick="switchTab('period')"><span class="nav-icon">🩸</span><span class="nav-label">Periode</span></button>
+    <button class="nav-btn" data-tab="finance" onclick="switchTab('finance')"><span class="nav-icon">💰</span><span class="nav-label">Finance</span></button>
+    <button class="nav-btn" data-tab="wellness" onclick="switchTab('wellness')"><span class="nav-icon">🌸</span><span class="nav-label">Wellness</span></button>
+  </div>
+
+  <!-- MODALS -->
+  <!-- Add Habit Modal -->
+  <div id="modal-add-habit" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">✨ Tambah Habit Baru</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-habit')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:10px">
+          <input class="input-field" id="new-habit-name" placeholder="Nama habit..." style="flex:1">
+          <input class="input-field" id="new-habit-emoji" placeholder="🌸" style="width:60px">
+        </div>
+        <select class="select-field" id="new-habit-category">
+          <option>Beauty</option><option>Health</option><option>Growth</option>
+          <option>Mental</option><option>Study</option><option>Social</option>
+        </select>
+        <div style="display:flex;gap:8px;flex-wrap:wrap" id="habit-color-picker"></div>
+        <button class="btn-primary btn-full" onclick="addHabit()">Tambah Habit ✨</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Goal Modal -->
+  <div id="modal-add-goal" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">🎯 Tambah Goal Baru</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-goal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:10px">
+          <input class="input-field" id="new-goal-title" placeholder="Nama goal impianmu..." style="flex:1">
+          <input class="input-field" id="new-goal-emoji" placeholder="🎯" style="width:60px">
+        </div>
+        <input class="input-field" id="new-goal-deadline" type="date">
+        <div>
+          <label class="input-label" id="new-goal-progress-label">Progress saat ini: 0%</label>
+          <input type="range" min="0" max="100" value="0" id="new-goal-progress" style="width:100%;accent-color:#ec4899" oninput="document.getElementById('new-goal-progress-label').textContent='Progress saat ini: '+this.value+'%'">
+        </div>
+        <button class="btn-primary btn-full" onclick="addGoal()">Tambah Goal 🎯</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Task Modal -->
+  <div id="modal-add-task" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">📌 Tambah Tugas Baru</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-task')">✕</button>
+      </div>
+      <div class="modal-body">
+        <input class="input-field" id="new-task-title" placeholder="Nama tugas...">
+        <input class="input-field" id="new-task-subject" placeholder="Mata kuliah / proyek...">
+        <input class="input-field" id="new-task-due" type="date">
+        <select class="select-field" id="new-task-priority">
+          <option value="high">🔥 Urgent</option>
+          <option value="medium" selected>⏰ Normal</option>
+          <option value="low">🌿 Santai</option>
+        </select>
+        <button class="btn-primary btn-full" onclick="addTask()">Tambah Tugas 📚</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Diary Modal -->
+  <div id="modal-add-diary" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">💌 Tulis Diary</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-diary')">✕</button>
+      </div>
+      <div class="modal-body">
+        <input class="input-field" id="new-diary-title" placeholder="Judul hari ini...">
+        <textarea class="input-field" id="new-diary-content" placeholder="Ceritakan semua perasaanmu, Rajwa... 💕"></textarea>
+        <div>
+          <div class="input-label">Mood hari ini:</div>
+          <div id="diary-mood-picker" style="display:flex;gap:6px"></div>
+        </div>
+        <input class="input-field" id="new-diary-tags" placeholder="Tags (pisah dengan koma): skripsi, senang">
+        <button class="btn-primary btn-full" onclick="addDiary()">Simpan Diary 💌</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Period Modal -->
+  <div id="modal-add-period" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">🩸 Catat Haid</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-period')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div>
+          <label class="input-label">Tanggal Mulai Haid *</label>
+          <input class="input-field" id="new-period-start" type="date">
+        </div>
+        <div>
+          <label class="input-label">Tanggal Selesai Haid</label>
+          <input class="input-field" id="new-period-end" type="date">
+        </div>
+        <div>
+          <label class="input-label">Aliran Darah</label>
+          <div style="display:flex;gap:8px" id="flow-picker"></div>
+        </div>
+        <div>
+          <label class="input-label">Gejala yang Dirasakan</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px" id="symptom-picker"></div>
+        </div>
+        <button class="btn-primary btn-full" onclick="addPeriodLog()">Simpan Catatan 🩸</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Transaction Modal -->
+  <div id="modal-add-tx" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">💸 Catat Transaksi</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-tx')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:8px">
+          <button id="tx-type-out" class="flow-btn selected" onclick="setTxType('out')" style="background:#fce7f3;border-color:#fda4af">⬇ Pengeluaran</button>
+          <button id="tx-type-in" class="flow-btn" onclick="setTxType('in')">⬆ Pemasukan</button>
+        </div>
+        <div>
+          <label class="input-label">Jumlah</label>
+          <div class="rupiah-wrapper">
+            <span class="rupiah-prefix">Rp</span>
+            <input class="rupiah-input" id="new-tx-amount" type="text" inputmode="numeric" placeholder="0" oninput="formatRupiahInput(this)">
+          </div>
+        </div>
+        <div>
+          <label class="input-label">Keterangan *</label>
+          <input class="input-field" id="new-tx-desc" placeholder="Contoh: Makan siang sama bestie...">
+        </div>
+        <div>
+          <label class="input-label">Kategori</label>
+          <div id="tx-category-picker" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+        <div>
+          <label class="input-label">Catatan (opsional)</label>
+          <input class="input-field" id="new-tx-note" placeholder="Catatan tambahan...">
+        </div>
+        <button class="btn-primary btn-full" onclick="addTransaction()">Simpan Transaksi 💸</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Budget Edit Modal -->
+  <div id="modal-budget" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">🎯 Atur Budget</h3>
+        <button class="modal-close" onclick="hideModal('modal-budget')">✕</button>
+      </div>
+      <div class="modal-body" style="max-height:60vh;overflow-y:auto" id="budget-edit-form"></div>
+    </div>
+  </div>
+
+  <!-- Add Saving Modal -->
+  <div id="modal-add-saving" class="modal-overlay" style="display:none">
+    <div class="modal-box scale-in">
+      <div class="modal-header">
+        <h3 class="modal-title">🐷 Tambah Saving Goal</h3>
+        <button class="modal-close" onclick="hideModal('modal-add-saving')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:10px">
+          <div style="flex:1"><label class="input-label">Nama Tabungan</label><input class="input-field" id="new-saving-title" placeholder="Contoh: Dana Wisuda..."></div>
+          <div style="width:70px"><label class="input-label">Emoji</label><input class="input-field" id="new-saving-emoji" placeholder="🐷" value="💰"></div>
+        </div>
+        <div>
+          <label class="input-label">Target Tabungan</label>
+          <div class="rupiah-wrapper"><span class="rupiah-prefix">Rp</span><input class="rupiah-input" id="new-saving-target" type="text" inputmode="numeric" placeholder="0" oninput="formatRupiahInput(this)"></div>
+        </div>
+        <div>
+          <label class="input-label">Sudah Ditabung (opsional)</label>
+          <div class="rupiah-wrapper"><span class="rupiah-prefix">Rp</span><input class="rupiah-input" id="new-saving-saved" type="text" inputmode="numeric" placeholder="0" oninput="formatRupiahInput(this)"></div>
+        </div>
+        <div>
+          <label class="input-label">Warna</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap" id="saving-color-picker"></div>
+        </div>
+        <button class="btn-primary btn-full" onclick="addSaving()">Tambah Goal 🐷</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===================== DATA =====================
+const MOODS = ["😍","😊","😐","😢","😤","🥱","🤩","💅"];
+const MOOD_LABELS = ["Jatuh Cinta","Senang","Biasa Aja","Sedih","Kesel","Ngantuk","Excited","Slay"];
+const AFFIRMATIONS = [
+  "Kamu luar biasa, Rajwa! Hari ini pasti bisa kamu taklukkan 💖",
+  "Singlemu bukan kesepian, tapi kebebasan untuk jadi versi terbaik dirimu ✨",
+  "Rajwa, kamu sedang tumbuh jadi wanita yang kuat dan mandiri 🌸",
+  "Tidak perlu validasi siapapun — kamu sudah cukup dan lebih dari itu 💅",
+  "Fokus pada dirimu dulu, semesta akan mengatur sisanya 🌙",
+  "Capek itu wajar, tapi kamu nggak boleh nyerah ya Rajwa! 💪",
+  "Hari ini adalah kesempatan baru untuk menulis cerita yang indah 🌺",
+  "Kamu bukan sedang menunggu seseorang — kamu sedang membangun dirimu 👑",
+];
+const DAILY_QUOTES = [
+  '"Kesuksesan adalah hasil dari persiapan, kerja keras, dan belajar dari kegagalan." 💫',
+  '"Tidak ada jalan pintas menuju tempat yang layak kamu tuju." 🌺',
+  '"Setiap hari adalah kesempatan baru untuk menjadi versi terbaik dirimu." ✨',
+  '"Perempuan kuat bukan yang tidak pernah jatuh, tapi yang bangkit setiap kali." 👑',
+  '"Impianmu tidak akan bekerja kecuali kamu melakukannya." 💪',
+  '"Bersabarlah pada dirimu sendiri. Bertumbuh itu butuh waktu." 🌸',
+  '"Kamu lebih berani dari yang kamu percaya, lebih kuat dari yang kamu rasakan." 🦋',
+];
+const COLORS = ["#f9a8d4","#fda4af","#c4b5fd","#e9d5ff","#fed7aa","#a7f3d0","#bae6fd","#fef08a"];
+const OUT_CATS = [
+  {label:"Makan",emoji:"🍱"},{label:"Jajan",emoji:"🧋"},{label:"Transport",emoji:"🛵"},
+  {label:"Skincare",emoji:"✨"},{label:"Fashion",emoji:"👗"},{label:"Kuliah",emoji:"📚"},
+  {label:"Hiburan",emoji:"🎬"},{label:"Kesehatan",emoji:"💊"},{label:"Tagihan",emoji:"🧾"},{label:"Lainnya",emoji:"📦"}
+];
+const IN_CATS = [
+  {label:"Uang Saku Ortu",emoji:"💕"},{label:"Gaji / Upah",emoji:"💼"},{label:"Freelance",emoji:"💻"},
+  {label:"Beasiswa",emoji:"🎓"},{label:"Hadiah / Kado",emoji:"🎁"},{label:"Jual Barang",emoji:"🛍️"},
+  {label:"Investasi",emoji:"📈"},{label:"Lainnya",emoji:"✨"}
+];
+const SYMPTOMS_OPTIONS = ["kram","sakit kepala","kembung","lelah","mood swing","jerawat","mual","nyeri punggung","insomnia","ngidam"];
+const FLOW_OPTIONS = [{val:"flek",label:"Flek 🩸",color:"#fecdd3"},{val:"ringan",label:"Ringan 💧",color:"#fda4af"},{val:"sedang",label:"Sedang 🌸",color:"#f9a8d4"},{val:"deras",label:"Deras 🩸",color:"#fb7185"}];
+const SELFCARE_ITEMS = [
+  {emoji:"☀️",text:"Sunscreen sebelum keluar"},{emoji:"🧘‍♀️",text:"5 menit meditasi"},
+  {emoji:"📵",text:"30 menit no-phone time"},{emoji:"💆‍♀️",text:"Pijat kepala sebelum tidur"},
+  {emoji:"🛁",text:"Mandi air hangat"},{emoji:"🥗",text:"Makan makanan bergizi"},
+];
+const MOTIVASI = [
+  {emoji:"👑",text:"Kamu tidak sedang menunggu siapapun — kamu sedang membangun kerajaan dirimu sendiri.",by:"— untuk Rajwa"},
+  {emoji:"🌸",text:"Perempuan tangguh bukan yang tidak pernah jatuh, tapi yang bangkit lebih kuat setiap kali.",by:"— Reminder harian"},
+  {emoji:"✨",text:"Nilai dirimu bukan dari siapa yang memilihmu, tapi dari seberapa kuat kamu memilih dirimu sendiri.",by:"— Self-love note"},
+  {emoji:"🎓",text:"Setiap halaman skripsi yang kamu tulis adalah bukti bahwa kamu tidak menyerah. Keep going!",by:"— Untuk mahasiswi hebat"},
+  {emoji:"💪",text:"Capek itu normal. Menyerah itu pilihan. Kamu terlalu berharga untuk menyerah, Rajwa.",by:"— Dari hati yang percaya padamu"},
+  {emoji:"🌙",text:"Tidak perlu terburu-buru. Bunga yang mekar perlahan justru yang paling indah.",by:"— Be patient with yourself"},
+  {emoji:"💕",text:"Single bukan berarti sendirian. Kamu punya dirimu — dan itu sudah lebih dari cukup.",by:"— Love yourself first"},
+  {emoji:"🌺",text:"Setiap hari yang kamu jalani dengan berani adalah kemenangan. Hari ini kamu sudah menang!",by:"— Proud of you, Rajwa"},
+];
+
+// ===================== STATE =====================
+let state = {
+  activeTab: 'home',
+  todayMood: null,
+  affirmationIdx: 0,
+  quoteIdx: 0,
+  waterCount: 3,
+  waterTarget: 8,
+  habits: [
+    {id:1,name:"Skincare Pagi",emoji:"✨",category:"Beauty",streak:3,done:false,color:"#f9a8d4"},
+    {id:2,name:"Minum Air 8 Gelas",emoji:"💧",category:"Health",streak:5,done:false,color:"#93c5fd"},
+    {id:3,name:"Olahraga 30 Menit",emoji:"🏃‍♀️",category:"Health",streak:1,done:false,color:"#86efac"},
+    {id:4,name:"Baca Buku",emoji:"📖",category:"Growth",streak:7,done:false,color:"#c4b5fd"},
+    {id:5,name:"Journaling",emoji:"📝",category:"Mental",streak:2,done:false,color:"#fcd34d"},
+  ],
+  goals: [
+    {id:1,title:"Lulus Cumlaude",emoji:"🎓",deadline:"2026-08-01",progress:65,color:"#f9a8d4"},
+    {id:2,title:"Langsing 5 Kg",emoji:"💪",deadline:"2025-12-01",progress:30,color:"#86efac"},
+    {id:3,title:"Belajar Bahasa Korea",emoji:"🇰🇷",deadline:"2025-10-01",progress:45,color:"#c4b5fd"},
+  ],
+  tasks: [
+    {id:1,title:"Tugas Metodologi Penelitian",subject:"Metpen",due:"2025-03-15",priority:"high",done:false,emoji:"📊"},
+    {id:2,title:"Revisi Proposal Skripsi Bab 2",subject:"Skripsi",due:"2025-03-20",priority:"high",done:false,emoji:"📝"},
+    {id:3,title:"UTS Statistika",subject:"Statistika",due:"2025-03-18",priority:"medium",done:false,emoji:"📐"},
+    {id:4,title:"Presentasi Kelompok",subject:"Manajemen",due:"2025-03-22",priority:"low",done:true,emoji:"🎤"},
+  ],
+  diaryEntries: [
+    {id:1,date:"2025-03-08",mood:"😊",title:"Hari yang produktif!",content:"Hari ini aku berhasil menyelesaikan draft bab 2 skripsi. Capek tapi puas banget! ✨",tags:["skripsi","produktif"],color:"#fce7f3"},
+  ],
+  selectedDiary: null,
+  period: {lastDate:"2025-02-20",cycleLength:28,periodLength:5},
+  periodLog: [
+    {id:1,startDate:"2025-02-20",endDate:"2025-02-25",symptoms:["kram","lelah"],flow:"sedang"},
+    {id:2,startDate:"2025-01-23",endDate:"2025-01-28",symptoms:["sakit kepala"],flow:"deras"},
+  ],
+  transactions: [],
+  savingGoals: [],
+  monthlyBudgets: {Makan:400000,Transport:200000,Skincare:300000,Fashion:200000,Kuliah:150000,Hiburan:100000,Jajan:150000,Kesehatan:100000,Lainnya:100000,Tagihan:0},
+  financeView: 'overview',
+  txFilter: 'semua',
+  txType: 'out',
+  txCategory: 'Makan',
+  selfCare: [false,false,false,false,false,false],
+  newHabitColor: '#f9a8d4',
+  newGoalColor: '#f9a8d4',
+  newSavingColor: '#f9a8d4',
+  newPeriodFlow: 'sedang',
+  newPeriodSymptoms: [],
+  breatheActive: false,
+  breathePhase: 'idle',
+  breatheTimeout: null,
+  diaryMood: '😊',
+  periodSettingsOpen: false,
+};
+
+// ── Firebase save helper (safe if Firebase not loaded yet) ──
+function save(section) {
+  if(typeof window.fbSave === 'function') {
+    window.fbSave(section, state[section]).catch(()=>{});
+  }
+}
+
+function renderAll() {
+  renderHome();
+  renderHabits();
+  renderGoals();
+  renderTasks();
+  renderDiary();
+  initColorPicker('habit-color-picker','newHabitColor');
+  initDiaryMoodPicker();
+  initPeriodModal();
+  renderTxCategoryPicker();
+  initColorPicker('saving-color-picker','newSavingColor');
+  renderWellness();
+  if(state.activeTab === 'period') renderPeriod();
+  if(state.activeTab === 'finance') renderFinance();
+}
+function fmt(n) { return 'Rp ' + Number(n).toLocaleString('id-ID'); }
+function fmtShort(n) {
+  n = Number(n);
+  if (n >= 1000000) return 'Rp ' + (n/1000000).toFixed(1) + 'jt';
+  if (n >= 1000) return 'Rp ' + Math.round(n/1000) + 'rb';
+  return 'Rp ' + n;
+}
+function today() {
+  return new Date().toLocaleDateString('id-ID', {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+}
+function formatRupiahInput(el) {
+  let raw = el.value.replace(/[^\d]/g,'');
+  el.value = raw ? Number(raw).toLocaleString('id-ID') : '';
+  el.dataset.raw = raw;
+}
+function getRaw(el) { return Number(el.dataset.raw || el.value.replace(/[^\d]/g,'')) || 0; }
+function idDate(d) { return new Date(d).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'}); }
+function idDateShort(d) { return new Date(d).toLocaleDateString('id-ID',{day:'numeric',month:'short'}); }
+
+function getPeriodInfo() {
+  const last = new Date(state.period.lastDate);
+  const nextStart = new Date(last); nextStart.setDate(nextStart.getDate() + state.period.cycleLength);
+  const nextEnd = new Date(nextStart); nextEnd.setDate(nextEnd.getDate() + state.period.periodLength - 1);
+  const tod = new Date(); tod.setHours(0,0,0,0);
+  const diffToNext = Math.ceil((nextStart - tod) / 86400000);
+  const ovulation = new Date(nextStart); ovulation.setDate(ovulation.getDate() - 14);
+  const diffOvulation = Math.ceil((ovulation - tod) / 86400000);
+  const fertileStart = new Date(ovulation); fertileStart.setDate(fertileStart.getDate() - 5);
+  const diffFertile = Math.ceil((fertileStart - tod) / 86400000);
+  const periodEnd = new Date(last); periodEnd.setDate(periodEnd.getDate() + state.period.periodLength - 1);
+  const inPeriod = tod >= last && tod <= periodEnd;
+  return {nextStart,nextEnd,diffToNext,ovulation,diffOvulation,fertileStart,diffFertile,inPeriod,last};
+}
+function nextPeriodText() {
+  const {diffToNext} = getPeriodInfo();
+  return diffToNext > 0 ? diffToNext+' hari lagi' : diffToNext === 0 ? 'Hari ini! 🩸' : 'Sudah lewat, catat sekarang! 🩸';
+}
+function todayPhaseDay() {
+  const last = new Date(state.period.lastDate);
+  const tod = new Date(); tod.setHours(0,0,0,0);
+  const diff = Math.ceil((tod - last) / 86400000) + 1;
+  return Math.max(1, Math.min(diff, state.period.cycleLength));
+}
+
+// ===================== MODAL =====================
+function showModal(id) { document.getElementById(id).style.display='flex'; }
+function hideModal(id) { document.getElementById(id).style.display='none'; }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if(e.target === m) m.style.display='none'; });
+});
+
+// ===================== TAB SWITCHING =====================
+function switchTab(tab) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  document.querySelector('[data-tab="'+tab+'"]').classList.add('active');
+  state.activeTab = tab;
+  if(tab === 'period') renderPeriod();
+  if(tab === 'finance') renderFinance();
+  if(tab === 'wellness') renderWellness();
+}
+
+// ===================== HOME =====================
+function renderHome() {
+  document.getElementById('today-date').textContent = today();
+  document.getElementById('affirmation-text').textContent = AFFIRMATIONS[state.affirmationIdx];
+  document.getElementById('daily-quote').textContent = DAILY_QUOTES[state.quoteIdx];
+  renderHomeStats();
+  renderMoodGrid();
+  renderWaterDrops();
+  renderHomePeriod();
+}
+function renderHomeStats() {
+  const doneH = state.habits.filter(h=>h.done).length;
+  const doneT = state.tasks.filter(t=>t.done).length;
+  document.getElementById('stats-habits').textContent = doneH+'/'+state.habits.length;
+  document.getElementById('stats-tasks').textContent = doneT+'/'+state.tasks.length;
+  document.getElementById('stats-water').textContent = state.waterCount+'/'+state.waterTarget;
+}
+function renderMoodGrid() {
+  const grid = document.getElementById('mood-grid');
+  grid.innerHTML = '';
+  MOODS.forEach((m,i) => {
+    const btn = document.createElement('button');
+    btn.className = 'mood-btn' + (state.todayMood===i?' selected':'');
+    btn.innerHTML = m + '<div class="mood-label">'+MOOD_LABELS[i]+'</div>';
+    btn.onclick = () => { state.todayMood = i; renderMoodGrid();
+      const r = document.getElementById('mood-result');
+      r.style.display='block'; r.textContent='Mood kamu hari ini: '+MOODS[i]+' '+MOOD_LABELS[i]+' — noted ya sayang! 💕';
+    };
+    grid.appendChild(btn);
+  });
+}
+function renderWaterDrops() {
+  const el = document.getElementById('water-drops');
+  el.innerHTML = '';
+  for(let i=0;i<state.waterTarget;i++) {
+    const btn = document.createElement('button');
+    btn.className = 'water-drop' + (i<state.waterCount?'':' empty');
+    btn.textContent = '💧';
+    btn.style.fontSize = state.waterTarget > 12 ? '22px' : '26px';
+    btn.onclick = () => { state.waterCount = i < state.waterCount ? i : i+1; updateWater(); };
+    el.appendChild(btn);
+  }
+  document.getElementById('water-count-label').textContent = state.waterCount+'/'+state.waterTarget+' gelas';
+  document.getElementById('water-target-num').textContent = state.waterTarget;
+  const progress = document.getElementById('water-progress-wrap');
+  const fill = document.getElementById('water-progress-fill');
+  const msg = document.getElementById('water-done-msg');
+  if(state.waterCount >= state.waterTarget) { progress.style.display='none'; msg.style.display='block'; }
+  else if(state.waterCount > 0) {
+    progress.style.display='block'; msg.style.display='none';
+    fill.style.width = (state.waterCount/state.waterTarget*100)+'%';
+  } else { progress.style.display='none'; msg.style.display='none'; }
+  document.getElementById('stats-water').textContent = state.waterCount+'/'+state.waterTarget;
+}
+function changeWaterTarget(d) {
+  state.waterTarget = Math.max(1, Math.min(20, state.waterTarget + d));
+  if(state.waterCount > state.waterTarget) state.waterCount = state.waterTarget;
+  renderWaterDrops(); save('waterTarget'); save('waterCount');
+}
+function resetWater() { state.waterCount = 0; renderWaterDrops(); save('waterCount'); }
+function updateWater() { renderWaterDrops(); save('waterCount'); }
+function renderHomePeriod() {
+  document.getElementById('home-period-last').textContent = 'Terakhir: ' + new Date(state.period.lastDate).toLocaleDateString('id-ID',{day:'numeric',month:'long'});
+  document.getElementById('home-period-next').textContent = 'Perkiraan berikutnya: ' + nextPeriodText();
+}
+function nextQuote() { state.quoteIdx = (state.quoteIdx+1) % DAILY_QUOTES.length; document.getElementById('daily-quote').textContent = DAILY_QUOTES[state.quoteIdx]; }
+
+// ===================== HABITS =====================
+function renderHabits() {
+  const done = state.habits.filter(h=>h.done).length;
+  document.getElementById('habits-progress-label').textContent = done+'/'+state.habits.length;
+  document.getElementById('habits-progress-fill').style.width = state.habits.length ? (done/state.habits.length*100)+'%' : '0%';
+  document.getElementById('habits-done-msg').style.display = (done === state.habits.length && state.habits.length > 0) ? 'block':'none';
+  renderHomeStats();
+  const list = document.getElementById('habits-list');
+  list.innerHTML = '';
+  state.habits.forEach(h => {
+    const div = document.createElement('div');
+    div.className = 'habit-item' + (h.done?' done':'');
+    if(h.done) { div.style.background = h.color+'33'; div.style.borderColor = h.color; }
+    div.innerHTML = `
+      <button class="habit-toggle${h.done?' done':''}" style="border-color:${h.color};${h.done?'background:'+h.color:''}" onclick="toggleHabit(${h.id})">
+        ${h.done ? '✓' : h.emoji}
+      </button>
+      <div style="flex:1">
+        <div class="habit-name">${h.name}</div>
+        <div class="habit-meta">🔥 ${h.streak} hari streak • ${h.category}</div>
+      </div>
+      <button class="btn-icon" onclick="deleteHabit(${h.id})">🗑</button>
+    `;
+    list.appendChild(div);
+  });
+}
+function toggleHabit(id) {
+  state.habits = state.habits.map(h => h.id===id ? {...h, done:!h.done, streak: h.done ? h.streak-1 : h.streak+1} : h);
+  renderHabits(); save('habits');
+  const pet = document.getElementById('pet-emoji');
+  const msg = document.getElementById('pet-msg');
+  pet.textContent = '🐱💕'; pet.style.transform = 'scale(1.2) rotate(-5deg)';
+  msg.textContent = 'Rajwa hebat! Terus konsisten ya! 💖';
+  setTimeout(() => { pet.textContent='🐱'; pet.style.transform=''; msg.textContent='Hai Rajwa! Aku teman setiamu 💖 Jangan lupa selesaikan habitmu ya!'; }, 3000);
+}
+function deleteHabit(id) { state.habits = state.habits.filter(h=>h.id!==id); renderHabits(); save('habits'); }
+function addHabit() {
+  const name = document.getElementById('new-habit-name').value.trim();
+  if(!name) return;
+  const emoji = document.getElementById('new-habit-emoji').value || '⭐';
+  const category = document.getElementById('new-habit-category').value;
+  state.habits.push({id:Date.now(),name,emoji,category,streak:0,done:false,color:state.newHabitColor});
+  document.getElementById('new-habit-name').value=''; document.getElementById('new-habit-emoji').value='';
+  hideModal('modal-add-habit'); renderHabits(); save('habits');
+}
+
+// ===================== GOALS =====================
+function renderGoals() {
+  const list = document.getElementById('goals-list');
+  list.innerHTML = '';
+  state.goals.forEach(g => {
+    const div = document.createElement('div');
+    div.className = 'goal-item';
+    div.style.borderColor = g.color+'66';
+    div.innerHTML = `
+      <div style="position:absolute;top:-10px;right:-10px;font-size:60px;opacity:0.08">${g.emoji}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:24px;margin-bottom:4px">${g.emoji}</div>
+          <div style="font-weight:800;color:#7c3f6e;font-size:16px;font-family:'Playfair Display',serif">${g.title}</div>
+          <div style="font-size:12px;color:#be185d;margin-top:2px">📅 Deadline: ${g.deadline ? idDate(g.deadline) : 'Belum ditentukan'}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <div style="background:${g.color};border-radius:12px;padding:4px 12px;font-weight:800;color:#fff;font-size:14px">${g.progress}%</div>
+          <button class="btn-icon" onclick="deleteGoal(${g.id})">🗑</button>
+        </div>
+      </div>
+      <div class="progress-track"><div class="progress-fill" style="background:linear-gradient(90deg,${g.color},${g.color}99);width:${g.progress}%"></div></div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        ${[0,25,50,75,100].map(p=>`<button class="goal-progress-btn" style="${g.progress>=p?'border-color:'+g.color+';background:'+g.color+'33':''}" onclick="setGoalProgress(${g.id},${p})">${p}%</button>`).join('')}
+      </div>
+    `;
+    list.appendChild(div);
+  });
+}
+function setGoalProgress(id, p) { state.goals = state.goals.map(g => g.id===id ? {...g,progress:p} : g); renderGoals(); save('goals'); }
+function deleteGoal(id) { state.goals = state.goals.filter(g=>g.id!==id); renderGoals(); save('goals'); }
+function addGoal() {
+  const title = document.getElementById('new-goal-title').value.trim();
+  if(!title) return;
+  const emoji = document.getElementById('new-goal-emoji').value || '🎯';
+  const deadline = document.getElementById('new-goal-deadline').value;
+  const progress = Number(document.getElementById('new-goal-progress').value);
+  state.goals.push({id:Date.now(),title,emoji,deadline,progress,color:state.newGoalColor});
+  document.getElementById('new-goal-title').value=''; document.getElementById('new-goal-deadline').value='';
+  document.getElementById('new-goal-progress').value=0;
+  document.getElementById('new-goal-progress-label').textContent='Progress saat ini: 0%';
+  hideModal('modal-add-goal'); renderGoals(); save('goals');
+}
+
+// ===================== TASKS =====================
+const PRIORITY_COLORS = {high:'#fecdd3',medium:'#fed7aa',low:'#bbf7d0'};
+const PRIORITY_TEXT = {high:'Urgent 🔥',medium:'Normal ⏰',low:'Santai 🌿'};
+const TASK_EMOJIS = {high:'📊',medium:'📌',low:'🌿'};
+function renderTasks() {
+  const pending = state.tasks.filter(t=>!t.done).length;
+  const urgent = state.tasks.filter(t=>!t.done&&t.priority==='high').length;
+  const done = state.tasks.filter(t=>t.done).length;
+  const stats = document.getElementById('tasks-stats');
+  stats.innerHTML = [
+    {label:'Belum',count:pending,color:'#fce7f3'},
+    {label:'Urgent',count:urgent,color:'#fecdd3'},
+    {label:'Selesai',count:done,color:'#bbf7d0'},
+  ].map(s=>`<div style="flex:1;background:${s.color};border-radius:16px;padding:12px 8px;text-align:center;border:2px solid white">
+    <div style="font-weight:800;font-size:20px;color:#7c3f6e">${s.count}</div>
+    <div style="font-size:11px;color:#9d174d;font-weight:600">${s.label}</div>
+  </div>`).join('');
+  renderHomeStats();
+  const list = document.getElementById('tasks-list');
+  list.innerHTML = '';
+  ['high','medium','low'].forEach(priority => {
+    const filtered = state.tasks.filter(t=>t.priority===priority);
+    if(!filtered.length) return;
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:13px;font-weight:700;color:#be185d;margin-bottom:8px;padding-left:4px;margin-top:8px';
+    label.textContent = PRIORITY_TEXT[priority];
+    list.appendChild(label);
+    filtered.forEach(task => {
+      const div = document.createElement('div');
+      div.className = 'task-item' + (task.done?' done':'');
+      if(!task.done) div.style.borderColor = PRIORITY_COLORS[task.priority];
+      div.innerHTML = `
+        <button class="task-toggle${task.done?' done':''}" onclick="toggleTask(${task.id})">${task.done?'✓':task.emoji}</button>
+        <div style="flex:1">
+          <div class="task-title${task.done?' done':''}">${task.title}</div>
+          <div class="task-meta">${task.subject?'📌 '+task.subject:''}${task.due?' • 📅 '+idDateShort(task.due):''}</div>
+        </div>
+        <button class="btn-icon" onclick="deleteTask(${task.id})">🗑</button>
+      `;
+      list.appendChild(div);
+    });
+  });
+}
+function toggleTask(id) { state.tasks = state.tasks.map(t=>t.id===id?{...t,done:!t.done}:t); renderTasks(); save('tasks'); }
+function deleteTask(id) { state.tasks = state.tasks.filter(t=>t.id!==id); renderTasks(); save('tasks'); }
+function addTask() {
+  const title = document.getElementById('new-task-title').value.trim();
+  if(!title) return;
+  const subject = document.getElementById('new-task-subject').value;
+  const due = document.getElementById('new-task-due').value;
+  const priority = document.getElementById('new-task-priority').value;
+  const emoji = TASK_EMOJIS[priority] || '📌';
+  state.tasks.push({id:Date.now(),title,subject,due,priority,emoji,done:false});
+  document.getElementById('new-task-title').value=''; document.getElementById('new-task-subject').value=''; document.getElementById('new-task-due').value='';
+  hideModal('modal-add-task'); renderTasks(); save('tasks');
+}
+
+// ===================== DIARY =====================
+function renderDiary() {
+  const list = document.getElementById('diary-list');
+  const detail = document.getElementById('diary-detail');
+  if(state.selectedDiary) {
+    list.style.display='none'; detail.style.display='block';
+    const e = state.selectedDiary;
+    detail.innerHTML = `
+      <div style="background:${e.color};border-radius:24px;padding:24px;border:2px solid #fce7f3">
+        <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:28px">${e.mood}</div>
+            <h3 style="margin:4px 0;color:#7c3f6e;font-family:'Playfair Display',serif">${e.title}</h3>
+            <div style="font-size:12px;color:#be185d">${idDate(e.date)}</div>
+          </div>
+          <button class="btn-secondary" onclick="state.selectedDiary=null;renderDiary()" style="font-size:13px;height:fit-content">← Kembali</button>
+        </div>
+        <p style="color:#6b3a5e;line-height:1.8;font-size:14px;white-space:pre-wrap">${e.content}</p>
+        ${e.tags.length>0?'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">'+e.tags.map(t=>`<span class="tag-pill">#${t}</span>`).join('')+'</div>':''}
+      </div>`;
+  } else {
+    detail.style.display='none'; list.style.display='block';
+    list.innerHTML = state.diaryEntries.map(e=>`
+      <div class="diary-entry" style="background:${e.color}" onclick="selectDiary(${e.id})">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="display:flex;gap:12px;align-items:center">
+            <div style="font-size:28px">${e.mood}</div>
+            <div>
+              <div style="font-weight:700;color:#7c3f6e;font-family:'Playfair Display',serif;font-size:15px">${e.title}</div>
+              <div style="font-size:11px;color:#be185d">${idDate(e.date)}</div>
+            </div>
+          </div>
+          <button class="btn-icon" style="width:28px;height:28px;font-size:12px" onclick="event.stopPropagation();deleteDiary(${e.id})">🗑</button>
+        </div>
+        <p style="margin:10px 0 0;color:#6b3a5e;font-size:13px;line-height:1.6;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${e.content}</p>
+      </div>`).join('');
+  }
+}
+function selectDiary(id) { state.selectedDiary = state.diaryEntries.find(e=>e.id===id)||null; renderDiary(); }
+function deleteDiary(id) { state.diaryEntries = state.diaryEntries.filter(e=>e.id!==id); renderDiary(); save('diaryEntries'); }
+function addDiary() {
+  const title = document.getElementById('new-diary-title').value.trim();
+  if(!title) return;
+  const content = document.getElementById('new-diary-content').value;
+  const tags = document.getElementById('new-diary-tags').value.split(',').map(t=>t.trim()).filter(Boolean);
+  state.diaryEntries.unshift({id:Date.now(),date:new Date().toISOString().split('T')[0],mood:state.diaryMood,title,content,tags,color:'#fce7f3'});
+  document.getElementById('new-diary-title').value=''; document.getElementById('new-diary-content').value=''; document.getElementById('new-diary-tags').value='';
+  hideModal('modal-add-diary'); renderDiary(); save('diaryEntries');
+}
+function initDiaryMoodPicker() {
+  const el = document.getElementById('diary-mood-picker');
+  el.innerHTML = '';
+  MOODS.slice(0,5).map(m => {
+    const btn = document.createElement('button');
+    btn.className = 'mood-btn' + (state.diaryMood===m?' selected':'');
+    btn.style.fontSize='24px';
+    btn.innerHTML = m;
+    btn.onclick = () => { state.diaryMood=m; initDiaryMoodPicker(); };
+    el.appendChild(btn);
+  });
+}
+
+// ===================== PERIOD =====================
+function renderPeriod() {
+  renderPeriodSettings();
+  renderPeriodContent();
+}
+function togglePeriodSettings() { state.periodSettingsOpen=!state.periodSettingsOpen; renderPeriodSettings(); }
+function renderPeriodSettings() {
+  const el = document.getElementById('period-settings');
+  if(!state.periodSettingsOpen) { el.style.display='none'; return; }
+  el.style.display='block';
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <h4 style="margin:0 0 12px;color:#9d174d">⚙️ Pengaturan Siklus</h4>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div><label class="input-label">Tanggal Haid Terakhir</label>
+          <input type="date" class="input-field" value="${state.period.lastDate}" onchange="state.period.lastDate=this.value;renderPeriodContent();renderHomePeriod()"></div>
+        <div><label class="input-label">Panjang Siklus (hari): <span id="cycle-len-label">${state.period.cycleLength}</span></label>
+          <input type="range" min="21" max="35" value="${state.period.cycleLength}" style="width:100%;accent-color:#ec4899" oninput="state.period.cycleLength=Number(this.value);document.getElementById('cycle-len-label').textContent=this.value;renderPeriodContent()">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#be185d"><span>21</span><span>35</span></div></div>
+        <div><label class="input-label">Durasi Haid (hari): <span id="period-len-label">${state.period.periodLength}</span></label>
+          <input type="range" min="2" max="8" value="${state.period.periodLength}" style="width:100%;accent-color:#ec4899" oninput="state.period.periodLength=Number(this.value);document.getElementById('period-len-label').textContent=this.value;renderPeriodContent()">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#be185d"><span>2</span><span>8</span></div></div>
+        <button class="btn-primary btn-full" onclick="state.periodSettingsOpen=false;renderPeriodSettings()">Simpan ✨</button>
+      </div>
+    </div>`;
+}
+function renderPeriodContent() {
+  const el = document.getElementById('period-content');
+  const info = getPeriodInfo();
+  const phaseDay = todayPhaseDay();
+  const currentPhaseIdx = phaseDay <= state.period.periodLength ? 0 : phaseDay <= 13 ? 1 : phaseDay <= 15 ? 2 : 3;
+  const phases = [
+    {name:"Menstruasi",days:`Hari 1–${state.period.periodLength}`,desc:"Rahim melepaskan lapisannya. Istirahat cukup, kompres hangat.",emoji:"🩸",color:"#fecdd3"},
+    {name:"Folikuler",days:`Hari ${state.period.periodLength+1}–13`,desc:"Energi meningkat, hormon estrogen naik. Waktu terbaik untuk produktif!",emoji:"🌱",color:"#bbf7d0"},
+    {name:"Ovulasi",days:"Sekitar Hari 14",desc:"Puncak energi & kreativitas. Kamu bersinar di fase ini!",emoji:"✨",color:"#fef08a"},
+    {name:"Luteal",days:"Hari 15–28",desc:"PMS mungkin muncul. Jaga pola makan & self-care lebih ekstra.",emoji:"🌙",color:"#e9d5ff"},
+  ];
+  const calendarDays = Array.from({length:state.period.cycleLength}).map((_,i)=>{
+    const d=i+1;
+    const isPeriod=d<=state.period.periodLength, isOv=d===14, isFertile=d>=9&&d<=14, isToday=d===phaseDay;
+    let bg='#fce7f3'; if(isPeriod) bg='#fb7185'; else if(isOv) bg='#fbbf24'; else if(isFertile) bg='#86efac';
+    return `<div class="period-day${isPeriod?' in-period':''}${isFertile&&!isPeriod?' fertile':''}${isOv?' ovulation':''}${isToday?' today':''}" style="background:${bg}">${d}</div>`;
+  }).join('');
+  el.innerHTML = `
+    <!-- Status Card -->
+    <div class="card ${info.inPeriod?'card-red':'card-gradient'}" style="text-align:center;position:relative;overflow:hidden;margin-bottom:16px">
+      <div style="position:absolute;top:-15px;right:-15px;font-size:80px;opacity:0.06">🌹</div>
+      <div style="font-size:48px;margin-bottom:8px">${info.inPeriod?'🩸':'🌸'}</div>
+      <h3 style="margin:0 0 6px;color:#9d174d;font-family:'Playfair Display',serif;font-size:20px">
+        ${info.inPeriod ? 'Sedang Haid 🩸' : `Haid berikutnya dalam ${info.diffToNext>0?info.diffToNext+' hari':'sudah lewat!'}`}
+      </h3>
+      <p style="margin:0 0 16px;color:#be185d;font-size:13px">
+        ${info.inPeriod ? 'Istirahat yang cukup ya Rajwa, kamu kuat! 💖' : `Perkiraan: ${idDate(info.nextStart)} – ${idDateShort(info.nextEnd)}`}
+      </p>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+        ${[
+          {label:'Hari ke-',val:phaseDay,sub:'dari '+state.period.cycleLength,color:'#fce7f3'},
+          {label:'Ovulasi',val:info.diffOvulation>0?info.diffOvulation+'hr':'Sudah',sub:idDateShort(info.ovulation),color:'#fef9c3'},
+          {label:'Masa subur',val:info.diffFertile>0?info.diffFertile+'hr':'Aktif',sub:idDateShort(info.fertileStart),color:'#dcfce7'},
+        ].map(s=>`<div style="background:${s.color};border-radius:16px;padding:10px 16px;text-align:center;min-width:90px;border:1.5px solid white">
+          <div style="font-size:11px;color:#9d174d;font-weight:600">${s.label}</div>
+          <div style="font-size:20px;font-weight:800;color:#7c3f6e">${s.val}</div>
+          <div style="font-size:10px;color:#be185d">${s.sub}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Calendar -->
+    <div class="card" style="margin-bottom:16px">
+      <h3 class="card-title">📅 Visualisasi Siklus</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:5px">${calendarDays}</div>
+      <div style="display:flex;gap:12px;margin-top:12px;flex-wrap:wrap">
+        ${[{c:'#fb7185',l:'Haid'},{c:'#86efac',l:'Subur'},{c:'#fbbf24',l:'Ovulasi'},{c:'#fce7f3',l:'Normal'}].map(l=>`
+          <div style="display:flex;align-items:center;gap:5px">
+            <div style="width:12px;height:12px;border-radius:50%;background:${l.c}"></div>
+            <span style="font-size:11px;color:#9d174d;font-weight:600">${l.l}</span>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Phases -->
+    <div class="card" style="margin-bottom:16px">
+      <h3 class="card-title">🌙 Fase Siklus Kamu</h3>
+      ${phases.map((ph,i)=>`
+        <div style="background:${i===currentPhaseIdx?ph.color:'#fff'};border-radius:16px;padding:12px 16px;border:2px solid ${i===currentPhaseIdx?ph.color:'#fce7f3'};display:flex;gap:12px;margin-bottom:10px">
+          <div style="font-size:24px;flex-shrink:0">${ph.emoji}</div>
+          <div>
+            <div style="font-weight:700;color:#7c3f6e;font-size:14px;display:flex;gap:8px;align-items:center">
+              ${ph.name} ${i===currentPhaseIdx?'<span style="background:#ec4899;color:#fff;font-size:10px;border-radius:999px;padding:2px 8px">Sekarang ✨</span>':''}
+            </div>
+            <div style="font-size:11px;color:#be185d;margin-bottom:2px">📅 ${ph.days}</div>
+            <div style="font-size:12px;color:#6b3a5e;line-height:1.5">${ph.desc}</div>
+          </div>
+        </div>`).join('')}
+    </div>
+
+    <!-- Tips -->
+    <div class="card card-red" style="margin-bottom:16px">
+      <h3 class="card-title" style="color:#be123c">💊 Tips & Rekomendasi</h3>
+      ${[
+        {e:'🍫',t:'Cokelat hitam bisa bantu redakan kram haid'},
+        {e:'🌡️',t:'Kompres hangat di perut ampuh kurangi nyeri'},
+        {e:'🧘‍♀️',t:'Yoga ringan & stretching bagus saat haid'},
+        {e:'💊',t:'Minum Fe/zat besi selama & setelah haid'},
+        {e:'🥦',t:'Sayuran hijau bantu isi ulang zat besi yang hilang'},
+        {e:'🚫',t:'Hindari kafein & gula berlebih saat PMS'},
+        {e:'💧',t:'Perbanyak minum air, bisa kurangi kembung'},
+        {e:'😴',t:'Tidur cukup, hormon lebih stabil saat istirahat'},
+      ].map((t,i)=>`<div style="display:flex;gap:10px;padding:8px 0;border-bottom:${i<7?'1px solid #fce7f3':'none'}">
+        <span style="font-size:20px">${t.e}</span>
+        <span style="font-size:13px;color:#9f1239;line-height:1.5">${t.t}</span>
+      </div>`).join('')}
+    </div>
+
+    <!-- Log History -->
+    <div class="card" style="margin-bottom:16px">
+      <h3 class="card-title">📋 Riwayat Haid</h3>
+      ${state.periodLog.length===0?'<p style="color:#be185d;font-size:13px;text-align:center">Belum ada catatan. Tambahkan sekarang! 🌸</p>':
+        state.periodLog.map(log=>`
+          <div style="background:#fce7f3;border-radius:16px;padding:12px 14px;margin-bottom:10px;border:1.5px solid #fda4af">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div>
+                <div style="font-weight:700;color:#9f1239;font-size:14px">🩸 ${idDate(log.startDate)}${log.endDate?' — '+idDateShort(log.endDate):''}</div>
+                <div style="font-size:12px;color:#be185d;margin-top:3px">
+                  Aliran: ${FLOW_OPTIONS.find(f=>f.val===log.flow)?.label||log.flow}
+                  ${log.endDate?' • Durasi: '+(Math.ceil((new Date(log.endDate)-new Date(log.startDate))/86400000)+1)+' hari':''}
+                </div>
+                ${log.symptoms.length>0?'<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px">'+log.symptoms.map(s=>`<span style="background:#fda4af;border-radius:999px;padding:2px 10px;font-size:11px;color:#fff;font-weight:600">${s}</span>`).join('')+'</div>':''}
+              </div>
+              <button class="btn-icon" onclick="deletePeriodLog(${log.id})">🗑</button>
+            </div>
+          </div>`).join('')}
+    </div>`;
+  renderHomePeriod();
+}
+function deletePeriodLog(id) { state.periodLog = state.periodLog.filter(l=>l.id!==id); renderPeriodContent(); save('periodLog'); }
+function initPeriodModal() {
+  const flow = document.getElementById('flow-picker');
+  flow.innerHTML = '';
+  FLOW_OPTIONS.forEach(f => {
+    const btn = document.createElement('button');
+    btn.className = 'flow-btn' + (state.newPeriodFlow===f.val?' selected':'');
+    if(state.newPeriodFlow===f.val) btn.style.background = f.color;
+    btn.textContent = f.label;
+    btn.onclick = () => { state.newPeriodFlow=f.val; initPeriodModal(); };
+    flow.appendChild(btn);
+  });
+  const symptoms = document.getElementById('symptom-picker');
+  symptoms.innerHTML = '';
+  SYMPTOMS_OPTIONS.forEach(s => {
+    const btn = document.createElement('button');
+    btn.className = 'symptom-btn' + (state.newPeriodSymptoms.includes(s)?' selected':'');
+    btn.textContent = s;
+    btn.onclick = () => {
+      if(state.newPeriodSymptoms.includes(s)) state.newPeriodSymptoms=state.newPeriodSymptoms.filter(x=>x!==s);
+      else state.newPeriodSymptoms.push(s);
+      initPeriodModal();
+    };
+    symptoms.appendChild(btn);
+  });
+}
+function addPeriodLog() {
+  const start = document.getElementById('new-period-start').value;
+  if(!start) return;
+  const end = document.getElementById('new-period-end').value;
+  state.periodLog.unshift({id:Date.now(),startDate:start,endDate:end,flow:state.newPeriodFlow,symptoms:[...state.newPeriodSymptoms]});
+  state.period.lastDate = start;
+  document.getElementById('new-period-start').value=''; document.getElementById('new-period-end').value='';
+  state.newPeriodFlow='sedang'; state.newPeriodSymptoms=[];
+  hideModal('modal-add-period'); renderPeriod(); save('periodLog'); save('period');
+}
+
+// ===================== FINANCE =====================
+function switchFinanceView(v) {
+  state.financeView = v;
+  document.querySelectorAll('.finance-nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('fnav-'+v).classList.add('active');
+  renderFinance();
+}
+function setTxType(t) {
+  state.txType = t;
+  state.txCategory = t==='in' ? IN_CATS[0].label : OUT_CATS[0].label;
+  document.getElementById('tx-type-out').classList.toggle('selected', t==='out');
+  document.getElementById('tx-type-in').classList.toggle('selected', t==='in');
+  if(t==='out') { document.getElementById('tx-type-out').style.background='#fce7f3'; document.getElementById('tx-type-out').style.borderColor='#fda4af'; document.getElementById('tx-type-in').style.background=''; document.getElementById('tx-type-in').style.borderColor=''; }
+  else { document.getElementById('tx-type-in').style.background='#dcfce7'; document.getElementById('tx-type-in').style.borderColor='#86efac'; document.getElementById('tx-type-out').style.background=''; document.getElementById('tx-type-out').style.borderColor=''; }
+  renderTxCategoryPicker();
+}
+function renderTxCategoryPicker() {
+  const el = document.getElementById('tx-category-picker');
+  if(!el) return;
+  const cats = state.txType==='in' ? IN_CATS : OUT_CATS;
+  el.innerHTML = '';
+  cats.forEach(cat => {
+    const btn = document.createElement('button');
+    btn.className = 'symptom-btn' + (state.txCategory===cat.label?' selected':'');
+    btn.textContent = cat.emoji+' '+cat.label;
+    btn.onclick = () => { state.txCategory=cat.label; renderTxCategoryPicker(); };
+    el.appendChild(btn);
+  });
+}
+function addTransaction() {
+  const amt = getRaw(document.getElementById('new-tx-amount'));
+  const desc = document.getElementById('new-tx-desc').value.trim();
+  if(!amt || !desc) return;
+  const note = document.getElementById('new-tx-note').value;
+  const cats = state.txType==='in' ? IN_CATS : OUT_CATS;
+  const cat = cats.find(c=>c.label===state.txCategory) || cats[0];
+  state.transactions.unshift({id:Date.now(),type:state.txType,amount:amt,category:state.txCategory,desc,note,date:new Date().toISOString().split('T')[0],emoji:cat.emoji});
+  document.getElementById('new-tx-amount').value=''; document.getElementById('new-tx-desc').value=''; document.getElementById('new-tx-note').value='';
+  hideModal('modal-add-tx'); renderFinance(); save('transactions');
+}
+function renderFinance() {
+  const el = document.getElementById('finance-content');
+  const totalIn = state.transactions.filter(t=>t.type==='in').reduce((s,t)=>s+t.amount,0);
+  const totalOut = state.transactions.filter(t=>t.type==='out').reduce((s,t)=>s+t.amount,0);
+  const saldo = totalIn - totalOut;
+  if(state.financeView==='overview') renderFinanceOverview(el,totalIn,totalOut,saldo);
+  else if(state.financeView==='transaksi') renderFinanceTx(el);
+  else if(state.financeView==='budget') renderFinanceBudget(el,totalOut);
+  else if(state.financeView==='tabungan') renderFinanceSaving(el);
+}
+function renderFinanceOverview(el,totalIn,totalOut,saldo) {
+  const spendByCat = OUT_CATS.map(cat=>({
+    ...cat,
+    spent:state.transactions.filter(t=>t.type==='out'&&t.category===cat.label).reduce((s,t)=>s+t.amount,0),
+    budget:state.monthlyBudgets[cat.label]||0,
+  })).filter(c=>c.spent>0||c.budget>0);
+  const gradients = ['linear-gradient(90deg,#f9a8d4,#ec4899)','linear-gradient(90deg,#c4b5fd,#8b5cf6)','linear-gradient(90deg,#86efac,#22c55e)','linear-gradient(90deg,#fcd34d,#f59e0b)','linear-gradient(90deg,#93c5fd,#3b82f6)'];
+  el.innerHTML = `
+    <div class="saldo-card">
+      <div style="position:absolute;top:-30px;right:-30px;font-size:130px;opacity:0.05">💎</div>
+      <div style="font-size:11px;color:#c4b5fd;font-weight:700;letter-spacing:1.5px;margin-bottom:6px">SALDO KAMU</div>
+      <div style="font-size:36px;font-weight:800;font-family:'Playfair Display',serif;color:${saldo>=0?'#86efac':'#fda4af'};margin-bottom:20px;line-height:1">${fmt(saldo)}</div>
+      <div style="display:flex;gap:10px">
+        <div style="flex:1;background:rgba(134,239,172,0.12);border-radius:18px;padding:12px 14px;border:1px solid rgba(134,239,172,0.2)">
+          <div style="font-size:10px;color:#86efac;font-weight:700;margin-bottom:4px;letter-spacing:1px">⬆ PEMASUKAN</div>
+          <div style="font-size:18px;font-weight:800;color:#86efac">${fmtShort(totalIn)}</div>
+          <div style="font-size:10px;color:#86efac;opacity:0.7;margin-top:2px">${state.transactions.filter(t=>t.type==='in').length} transaksi</div>
+        </div>
+        <div style="flex:1;background:rgba(253,164,175,0.12);border-radius:18px;padding:12px 14px;border:1px solid rgba(253,164,175,0.2)">
+          <div style="font-size:10px;color:#fda4af;font-weight:700;margin-bottom:4px;letter-spacing:1px">⬇ PENGELUARAN</div>
+          <div style="font-size:18px;font-weight:800;color:#fda4af">${fmtShort(totalOut)}</div>
+          <div style="font-size:10px;color:#fda4af;opacity:0.7;margin-top:2px">${state.transactions.filter(t=>t.type==='out').length} transaksi</div>
+        </div>
+      </div>
+    </div>
+    ${state.transactions.length===0?`
+      <div class="card" style="border:2px dashed #fce7f3;text-align:center;padding:32px">
+        <div style="font-size:48px;margin-bottom:12px">💸</div>
+        <p style="color:#be185d;font-weight:700;margin:0 0 6px;font-family:'Playfair Display',serif">Belum ada transaksi</p>
+        <p style="color:#9d174d;font-size:13px;margin:0">Tekan tombol "+ Catat" untuk mulai mencatat keuanganmu 💕</p>
+      </div>`:`
+      ${spendByCat.filter(c=>c.spent>0).length>0?`
+      <div class="card" style="margin-bottom:16px">
+        <h3 class="card-title">📊 Pengeluaran per Kategori</h3>
+        ${spendByCat.filter(c=>c.spent>0).sort((a,b)=>b.spent-a.spent).map((cat,i)=>`
+          <div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:13px;color:#7c3f6e;font-weight:600">${cat.emoji} ${cat.label}</span>
+              <div style="text-align:right">
+                <span style="font-size:13px;color:#be185d;font-weight:800">${fmt(cat.spent)}</span>
+                ${cat.budget>0?`<span style="font-size:10px;color:#9d174d;margin-left:4px">/ ${fmtShort(cat.budget)}</span>`:''}
+              </div>
+            </div>
+            <div class="progress-track" style="height:8px"><div class="progress-fill" style="background:${cat.budget>0&&cat.spent>cat.budget?'linear-gradient(90deg,#fb7185,#e11d48)':gradients[i%5]};width:${cat.budget>0?Math.min(100,cat.spent/cat.budget*100):Math.min(100,cat.spent/totalOut*100)}%"></div></div>
+            ${cat.budget>0&&cat.spent>cat.budget?`<div style="font-size:10px;color:#e11d48;font-weight:700;margin-top:3px">⚠️ Melebihi budget ${fmt(cat.spent-cat.budget)}</div>`:''}
+          </div>`).join('')}
+      </div>`:''}
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <h3 style="margin:0;color:#9d174d;font-family:'Playfair Display',serif;font-size:16px">🕐 Transaksi Terakhir</h3>
+          <button onclick="switchFinanceView('transaksi')" style="background:none;border:none;color:#ec4899;font-size:12px;cursor:pointer;font-weight:700">Lihat semua →</button>
+        </div>
+        ${state.transactions.slice(0,4).map(tx=>`
+          <div class="tx-item">
+            <div class="tx-icon" style="background:${tx.type==='in'?'#dcfce7':'#fce7f3'}">${tx.emoji}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;color:#7c3f6e;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${tx.desc}</div>
+              <div style="font-size:10px;color:#be185d">${tx.category} · ${idDateShort(tx.date)}</div>
+            </div>
+            <div style="font-weight:800;font-size:13px;color:${tx.type==='in'?'#16a34a':'#e11d48'};flex-shrink:0">${tx.type==='in'?'+':'-'}${fmtShort(tx.amount)}</div>
+          </div>`).join('')}
+      </div>`}
+    <div class="card card-green" style="margin-bottom:16px">
+      <h3 style="margin:0 0 12px;color:#065f46;font-family:'Playfair Display',serif;font-size:16px">💡 Tips Finansial Cerdas</h3>
+      ${[
+        {e:'🐷',t:'50/30/20 rule: 50% kebutuhan, 30% keinginan, 20% tabungan'},
+        {e:'📱',t:'Selalu cek promo & cashback sebelum bayar'},
+        {e:'🍱',t:'Masak sendiri bisa hemat 40-60% budget makan'},
+        {e:'📝',t:'Catat SEMUA pengeluaran, sekecil apapun'},
+        {e:'⏳',t:'Tunggu 24 jam sebelum beli barang non-kebutuhan'},
+      ].map((tip,i)=>`<div style="display:flex;gap:10px;padding:7px 0;border-bottom:${i<4?'1px solid #a7f3d0':'none'}">
+        <span style="font-size:18px">${tip.e}</span>
+        <span style="font-size:13px;color:#065f46;line-height:1.5">${tip.t}</span>
+      </div>`).join('')}
+    </div>`;
+}
+function renderFinanceTx(el) {
+  const filtered = state.txFilter==='semua' ? state.transactions : state.transactions.filter(t=>t.type===state.txFilter);
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      ${[{v:'semua',l:'Semua'},{v:'in',l:'Pemasukan'},{v:'out',l:'Pengeluaran'}].map(f=>`
+        <button onclick="state.txFilter='${f.v}';renderFinance()" style="flex:1;padding:8px;border-radius:14px;border:2px solid ${state.txFilter===f.v?'#ec4899':'#fce7f3'};background:${state.txFilter===f.v?'linear-gradient(135deg,#fce7f3,#ede9fe)':'white'};color:#9d174d;font-weight:700;font-size:12px;cursor:pointer;font-family:'Nunito',sans-serif">${f.l}</button>`).join('')}
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      ${filtered.length===0?'<div style="text-align:center;padding:20px 0"><div style="font-size:40px;margin-bottom:8px">📭</div><p style="color:#be185d;font-size:13px;margin:0">Belum ada transaksi di sini 🌸</p></div>':
+        filtered.map((tx,idx)=>`
+          <div class="tx-item">
+            <div class="tx-icon" style="background:${tx.type==='in'?'#dcfce7':'#fce7f3'}">${tx.emoji}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;color:#7c3f6e;font-size:13px">${tx.desc}</div>
+              <div style="font-size:11px;color:#be185d">${tx.category} · ${idDate(tx.date)}</div>
+              ${tx.note?`<div style="font-size:11px;color:#9d174d;font-style:italic;margin-top:2px">📝 ${tx.note}</div>`:''}
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-weight:800;font-size:14px;color:${tx.type==='in'?'#16a34a':'#e11d48'}">${tx.type==='in'?'+':'-'}${fmt(tx.amount)}</div>
+              <div style="font-size:10px;color:#c4b5fd;font-weight:600">${tx.type==='in'?'⬆ Masuk':'⬇ Keluar'}</div>
+            </div>
+            <button class="btn-icon" onclick="state.transactions=state.transactions.filter(x=>x.id!==${tx.id});renderFinance()">🗑</button>
+          </div>`).join('')}
+    </div>
+    <button class="btn-primary btn-full" onclick="showModal('modal-add-tx')">+ Catat Transaksi Baru</button>`;
+}
+function renderFinanceBudget(el, totalOut) {
+  const totalBudget = Object.values(state.monthlyBudgets).reduce((s,v)=>s+v,0);
+  el.innerHTML = `
+    <div class="card" style="background:linear-gradient(135deg,#fff9fb,#fdf4ff);margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3 class="card-title" style="margin-bottom:0">🎯 Atur Budget per Kategori</h3>
+        <button onclick="showBudgetModal()" style="background:linear-gradient(135deg,#f9a8d4,#c4b5fd);border:none;border-radius:12px;padding:6px 14px;color:#fff;cursor:pointer;font-size:12px;font-weight:700">Edit Budget ✏️</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;padding:12px 16px;background:#fce7f3;border-radius:16px">
+        <div style="text-align:center"><div style="font-weight:800;color:#9d174d;font-size:18px">${fmtShort(totalBudget)}</div><div style="font-size:11px;color:#be185d;font-weight:600">Total Budget</div></div>
+        <div style="text-align:center"><div style="font-weight:800;color:#e11d48;font-size:18px">${fmtShort(totalOut)}</div><div style="font-size:11px;color:#be185d;font-weight:600">Terpakai</div></div>
+        <div style="text-align:center"><div style="font-weight:800;color:${totalBudget-totalOut>=0?'#16a34a':'#e11d48'};font-size:18px">${fmtShort(Math.abs(totalBudget-totalOut))}</div><div style="font-size:11px;color:#be185d;font-weight:600">${totalBudget-totalOut>=0?'Sisa':'Lebih'}</div></div>
+      </div>
+      ${OUT_CATS.map(cat=>{
+        const spent=state.transactions.filter(t=>t.type==='out'&&t.category===cat.label).reduce((s,t)=>s+t.amount,0);
+        const budget=state.monthlyBudgets[cat.label]||0;
+        const pct=budget>0?Math.min(100,Math.round(spent/budget*100)):0;
+        const over=budget>0&&spent>budget;
+        return `<div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:5px;align-items:center">
+            <span style="font-size:13px;color:#7c3f6e;font-weight:600">${cat.emoji} ${cat.label}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;color:${over?'#e11d48':'#be185d'};font-weight:700">${fmt(spent)}</span>
+              <span style="font-size:11px;color:#9d174d">/ ${budget>0?fmt(budget):'–'}</span>
+            </div>
+          </div>
+          <div class="progress-track" style="height:9px"><div class="progress-fill" style="background:${over?'linear-gradient(90deg,#fb7185,#e11d48)':pct>75?'linear-gradient(90deg,#fbbf24,#f59e0b)':'linear-gradient(90deg,#f9a8d4,#c4b5fd)'};width:${pct}%"></div></div>
+          <div style="display:flex;justify-content:space-between;margin-top:3px">
+            <span style="font-size:10px;color:${over?'#e11d48':pct>75?'#f59e0b':'#22c55e'};font-weight:700">${budget===0?'Belum diset':over?'⚠️ Lebih '+fmt(spent-budget):pct>75?'⚡ '+pct+'% terpakai':'✅ '+pct+'% terpakai'}</span>
+            ${budget>0?`<span style="font-size:10px;color:#9d174d">Sisa: ${fmt(Math.max(0,budget-spent))}</span>`:''}
+          </div>
+        </div>`;}).join('')}
+    </div>`;
+}
+function renderFinanceSaving(el) {
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;color:#9d174d;font-family:'Playfair Display',serif">🐷 Saving Goals</h3>
+      <button class="btn-primary" onclick="initSavingModal();showModal('modal-add-saving')">+ Tambah</button>
+    </div>
+    ${state.savingGoals.length===0?`
+      <div class="card" style="border:2px dashed #fce7f3;text-align:center;padding:32px">
+        <div style="font-size:48px;margin-bottom:12px">🐷</div>
+        <p style="color:#be185d;font-weight:700;margin:0 0 6px;font-family:'Playfair Display',serif">Belum ada saving goal</p>
+        <p style="color:#9d174d;font-size:13px;margin:0">Tambahkan target tabungan impianmu! 💕</p>
+      </div>`:
+      state.savingGoals.map(g=>{
+        const pct=Math.min(100,Math.round(g.saved/g.target*100));
+        return `<div class="saving-item" style="background:linear-gradient(135deg,${g.color}18,${g.color}08);border:2px solid ${g.color}44;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+            <div style="display:flex;gap:12px;align-items:center">
+              <div style="width:48px;height:48px;border-radius:50%;background:${g.color};display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 4px 12px ${g.color}66">${g.emoji}</div>
+              <div>
+                <div style="font-weight:800;color:#7c3f6e;font-size:15px;font-family:'Playfair Display',serif">${g.title}</div>
+                <div style="font-size:11px;color:#be185d;margin-top:2px">Target: ${fmt(g.target)}</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <div style="background:${g.color};border-radius:12px;padding:4px 12px;font-weight:800;font-size:14px;color:#fff">${pct}%</div>
+              <button class="btn-icon" onclick="state.savingGoals=state.savingGoals.filter(x=>x.id!==${g.id});renderFinance()">🗑</button>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:13px;font-weight:700;color:#7c3f6e">Terkumpul: ${fmt(g.saved)}</span>
+            <span style="font-size:13px;font-weight:700;color:#be185d">Kurang: ${fmt(Math.max(0,g.target-g.saved))}</span>
+          </div>
+          <div class="progress-track" style="height:10px;margin-bottom:12px"><div class="progress-fill" style="background:linear-gradient(90deg,${g.color},${g.color}99);width:${pct}%"></div></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${[10000,25000,50000,100000,500000].map(amt=>`<button class="saving-add-btn" style="border-color:${g.color}66" onclick="addToSaving(${g.id},${amt})">+${amt>=1000000?amt/1000000+'jt':amt>=1000?amt/1000+'rb':amt}</button>`).join('')}
+          </div>
+          ${pct>=100?'<div style="margin-top:10px;text-align:center;color:#16a34a;font-weight:800;font-size:14px">🎉 Target tercapai! Selamat Rajwa!</div>':''}
+        </div>`;}).join('')}`;
+}
+function addToSaving(id,amt) { state.savingGoals=state.savingGoals.map(g=>g.id===id?{...g,saved:Math.min(g.target,g.saved+amt)}:g); renderFinance(); save('savingGoals'); }
+function showBudgetModal() {
+  const form = document.getElementById('budget-edit-form');
+  form.innerHTML = '<p style="margin:0 0 4px;font-size:12px;color:#be185d">Set budget bulanan kamu untuk setiap kategori pengeluaran:</p>';
+  OUT_CATS.forEach(cat => {
+    const rawVal = state.monthlyBudgets[cat.label]||0;
+    form.innerHTML += `<div style="margin-bottom:10px">
+      <label class="input-label">${cat.emoji} ${cat.label}</label>
+      <div class="rupiah-wrapper"><span class="rupiah-prefix">Rp</span>
+        <input class="rupiah-input" data-cat="${cat.label}" type="text" inputmode="numeric"
+          value="${rawVal?Number(rawVal).toLocaleString('id-ID'):''}"
+          oninput="formatRupiahInput(this);state.monthlyBudgets[this.dataset.cat]=getRaw(this)">
+      </div></div>`;
+  });
+  form.innerHTML += `<button class="btn-primary btn-full" onclick="hideModal('modal-budget');renderFinance()" style="margin-top:4px">Simpan Budget ✅</button>`;
+  showModal('modal-budget');
+}
+function initSavingModal() {
+  state.newSavingColor='#f9a8d4';
+  renderSavingColorPicker();
+}
+function renderSavingColorPicker() {
+  const el = document.getElementById('saving-color-picker');
+  if(!el) return;
+  el.innerHTML = '';
+  COLORS.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'color-dot' + (state.newSavingColor===c?' selected':'');
+    btn.style.background = c;
+    btn.onclick = () => { state.newSavingColor=c; renderSavingColorPicker(); };
+    el.appendChild(btn);
+  });
+}
+function addSaving() {
+  const title = document.getElementById('new-saving-title').value.trim();
+  const target = getRaw(document.getElementById('new-saving-target'));
+  if(!title||!target) return;
+  const emoji = document.getElementById('new-saving-emoji').value || '💰';
+  const saved = getRaw(document.getElementById('new-saving-saved'));
+  state.savingGoals.push({id:Date.now(),title,emoji,target,saved,color:state.newSavingColor});
+  document.getElementById('new-saving-title').value=''; document.getElementById('new-saving-target').value=''; document.getElementById('new-saving-saved').value='';
+  hideModal('modal-add-saving'); renderFinance(); save('savingGoals');
+}
+
+// ===================== WELLNESS =====================
+let breatheTimer = null;
+function renderWellness() {
+  renderSelfCare();
+  renderMotivasi();
+  renderBreatheDots();
+}
+function renderSelfCare() {
+  const el = document.getElementById('selfcare-list');
+  if(!el) return;
+  el.innerHTML = SELFCARE_ITEMS.map((item,i)=>`
+    <div class="selfcare-item" onclick="toggleSelfCare(${i})">
+      <div class="selfcare-check${state.selfCare[i]?' done':''}">${state.selfCare[i]?'✓':''}</div>
+      <span style="font-size:18px">${item.emoji}</span>
+      <span style="color:#7c3f6e;font-size:14px;${state.selfCare[i]?'text-decoration:line-through;opacity:0.6':''}">${item.text}</span>
+    </div>`).join('');
+}
+function toggleSelfCare(i) { state.selfCare[i]=!state.selfCare[i]; renderSelfCare(); }
+function renderMotivasi() {
+  const el = document.getElementById('motivasi-list');
+  if(!el) return;
+  el.innerHTML = MOTIVASI.map((q,i)=>`
+    <div style="background:${i%2===0?'#fdf4ff':'#fff'};border-radius:18px;padding:14px 16px;margin-bottom:10px;border:2px solid #e9d5ff;display:flex;gap:12px;align-items:flex-start">
+      <span style="font-size:24px;flex-shrink:0">${q.emoji}</span>
+      <div>
+        <p style="margin:0;color:#5b21b6;font-size:13px;line-height:1.7;font-style:italic;font-family:'Playfair Display',serif">"${q.text}"</p>
+        <div style="margin-top:4px;color:#8b5cf6;font-size:11px;font-weight:600">${q.by}</div>
+      </div>
+    </div>`).join('');
+}
+function renderBreatheDots() {
+  const el = document.getElementById('breathe-dots');
+  if(!el) return;
+  if(!state.breatheActive) { el.innerHTML=''; return; }
+  const phases = ['Tarik napas...','Tahan...','Hembuskan...','Istirahat...'];
+  el.innerHTML = phases.map(p=>`<div style="width:8px;height:8px;border-radius:50%;background:${state.breathePhase===p?'#16a34a':'#bbf7d0'};transition:background 0.3s"></div>`).join('');
+}
+function toggleBreathe() {
+  if(state.breatheActive) { stopBreathe(); return; }
+  startBreathe();
+}
+function stopBreathe() {
+  if(breatheTimer) { clearTimeout(breatheTimer); breatheTimer=null; }
+  state.breatheActive=false; state.breathePhase='idle';
+  const core = document.getElementById('breathe-core');
+  const phaseText = document.getElementById('breathe-phase-text');
+  const btn = document.getElementById('breathe-btn');
+  core.classList.remove('active'); core.style.transform='';
+  document.getElementById('breathe-outer').style.transform='';
+  document.getElementById('breathe-mid').style.transform='';
+  if(phaseText) phaseText.textContent='Sesi selesai! Bagus sekali Rajwa 💚';
+  if(btn) { btn.textContent='Mulai Bernapas 🌿'; btn.style.background='linear-gradient(135deg,#86efac,#4ade80)'; btn.style.color='#166534'; }
+  renderBreatheDots();
+}
+function startBreathe() {
+  state.breatheActive=true;
+  const btn = document.getElementById('breathe-btn');
+  if(btn) { btn.textContent='Berhenti'; btn.style.background='#dcfce7'; btn.style.color='#166534'; }
+  const schedule = [
+    {phase:'Tarik napas...',dur:4000,scale:1.25},
+    {phase:'Tahan...',dur:4000,scale:1.25},
+    {phase:'Hembuskan...',dur:6000,scale:0.85},
+    {phase:'Istirahat...',dur:2000,scale:0.85},
+  ];
+  const cycles = 4;
+  let elapsed = 0;
+  const core = document.getElementById('breathe-core');
+  const outer = document.getElementById('breathe-outer');
+  const mid = document.getElementById('breathe-mid');
+  core.classList.add('active');
+  function runCycle(cycleIdx, stepIdx) {
+    if(!state.breatheActive) return;
+    if(cycleIdx >= cycles) { stopBreathe(); return; }
+    if(stepIdx >= schedule.length) { runCycle(cycleIdx+1, 0); return; }
+    const step = schedule[stepIdx];
+    state.breathePhase = step.phase;
+    const phaseText = document.getElementById('breathe-phase-text');
+    if(phaseText) phaseText.textContent = step.phase;
+    core.style.transform = 'scale('+step.scale+')';
+    outer.style.transform = 'scale('+(step.scale*1.2)+')';
+    mid.style.transform = 'scale('+(step.scale*1.1)+')';
+    renderBreatheDots();
+    breatheTimer = setTimeout(() => { runCycle(cycleIdx, stepIdx+1); }, step.dur);
+  }
+  runCycle(0, 0);
+}
+
+// ===================== COLOR PICKERS INIT =====================
+function initColorPicker(containerId, stateKey) {
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  el.innerHTML = '';
+  COLORS.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'color-dot' + (state[stateKey]===c?' selected':'');
+    btn.style.background = c;
+    btn.onclick = () => { state[stateKey]=c; initColorPicker(containerId, stateKey); };
+    el.appendChild(btn);
+  });
+}
+
+// ===================== AFFIRMATION INTERVAL =====================
+setInterval(() => {
+  state.affirmationIdx = (state.affirmationIdx+1) % AFFIRMATIONS.length;
+  const el = document.getElementById('affirmation-text');
+  if(el) el.textContent = AFFIRMATIONS[state.affirmationIdx];
+}, 8000);
+
+function showLoginLoading(show) {
+  const l=document.getElementById('login-loading'), b=document.getElementById('login-btn');
+  if(l) l.style.display=show?'block':'none';
+  if(b) b.disabled=show;
+}
+function showLoginError(msg) {
+  const e=document.getElementById('login-error');
+  if(e){e.style.display='block';e.textContent='⚠️ '+msg;}
+  showLoginLoading(false);
+}
+
+// ===================== INIT =====================
+window.addEventListener('DOMContentLoaded', () => {
+  // Login screen shown by default; app shown after auth
+  // Only init UI components that are always present
+  initColorPicker('habit-color-picker','newHabitColor');
+  initDiaryMoodPicker();
+  initPeriodModal();
+  renderTxCategoryPicker();
+  initColorPicker('saving-color-picker','newSavingColor');
+  document.getElementById('modal-add-habit').addEventListener('click', e => { if(e.target===document.getElementById('modal-add-habit')) hideModal('modal-add-habit'); });
+  document.getElementById('modal-add-period').addEventListener('click', e => { if(e.target===document.getElementById('modal-add-period')) hideModal('modal-add-period'); });
+});</script>
+</body>
+</html>
